@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: sbatch slurm/forcing_assemble.sbatch <dataset>
+# Usage: sbatch slurm/forcing_assemble.sbatch <dataset> [places_csv] [block_dir] [out_dir]
 #SBATCH --job-name=ngidf-fassemble
 #SBATCH --partition=t2small
 #SBATCH --qos=tier2
@@ -23,8 +23,8 @@ case $ds in
   CESM_hist_LE*) ref=$NGIDL/dhsvm_cesm_1hour/hC2LE${ds##*LE};;
   CESM_futu_LE*) ref=$NGIDL/dhsvm_cesm_1hour/fC2LE${ds##*LE};;
 esac
-/usr/bin/time -v python -I $REPO/ngidf/forcing.py assemble --dataset $ds --places $REPO/data/places/places_ak.csv \
-    --block-dir $DATA_ROOT/work/forcing_blocks --out-dir $DATA_ROOT/work/forcing --workers 8
-python -I $REPO/ngidf/forcing.py validate --ours-dir $DATA_ROOT/work/forcing/$ds --ref-dir $ref \
-    > $DATA_ROOT/work/forcing/$ds/VALIDATION.txt
-tail -2 $DATA_ROOT/work/forcing/$ds/VALIDATION.txt
+/usr/bin/time -v python -I $REPO/ngidf/forcing.py assemble --dataset $ds --places ${2:-$REPO/data/places/places_ak.csv} \
+    --block-dir ${3:-$DATA_ROOT/work/forcing_blocks} --out-dir ${4:-$DATA_ROOT/work/forcing} --workers 8
+out=${4:-$DATA_ROOT/work/forcing}/$ds
+python -I $REPO/ngidf/forcing.py validate --ours-dir $out --ref-dir $ref > $out/VALIDATION.txt
+tail -2 $out/VALIDATION.txt

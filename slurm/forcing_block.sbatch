@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: sbatch --array=0-<nblocks-1> slurm/forcing_block.sbatch <dataset>
+# Usage: sbatch --array=0-<nblocks-1> slurm/forcing_block.sbatch <dataset> [places_csv] [block_dir]
 #SBATCH --job-name=ngidf-fblock
 #SBATCH --partition=t2small
 #SBATCH --qos=tier2
@@ -17,4 +17,4 @@ set +u; conda activate "$NGIDF_ENV"; set -u
 export OMP_NUM_THREADS=1 HDF5_USE_FILE_LOCKING=FALSE
 ds=${1:?dataset}
 /usr/bin/time -v python -I $REPO/ngidf/forcing.py block --dataset "$ds" --index "$SLURM_ARRAY_TASK_ID" \
-    --places $REPO/data/places/places_ak.csv --out-dir $DATA_ROOT/work/forcing_blocks --workers 8
+    --places ${2:-$REPO/data/places/places_ak.csv} --out-dir ${3:-$DATA_ROOT/work/forcing_blocks} --workers 8

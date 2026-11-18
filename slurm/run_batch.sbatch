@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: sbatch --array=0-<N-1> slurm/run_batch.sbatch <manifest.csv> <N>
+# Usage: sbatch --array=0-<N-1> slurm/run_batch.sbatch <manifest.csv> <N> [out_root]
 #SBATCH --job-name=ngidf-runs
 #SBATCH --partition=t2small
 #SBATCH --qos=tier2
@@ -19,4 +19,4 @@ manifest=${1:?manifest}; n=${2:?ntasks}
 work=/tmp/ngidf_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}; mkdir -p $work; trap 'rm -rf $work' EXIT
 python -I $REPO/ngidf/run_batch.py run --manifest "$manifest" --task $SLURM_ARRAY_TASK_ID --ntasks $n --workers 16 \
     --app-dir $DATA_ROOT/app/NG_IDF_AWS --dhsvm-bin $DATA_ROOT/build/dhsvm_${APP_COMMIT:0:7}/DHSVM3.2 \
-    --out-root $DATA_ROOT/runs --work-root $work
+    --out-root ${3:-$DATA_ROOT/runs} --work-root $work
