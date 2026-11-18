@@ -1,0 +1,12 @@
+# MetSim env for the Daymet forcing (ngidf/daymet_forcing.py). Created with micromamba; pandas pinned
+# below 2.3 via pip because MetSim 2.4.4 uses frequency strings ("180T") that pandas 3 removed.
+#   MAMBA_ROOT_PREFIX=$DATA_ROOT/mamba_root CONDA_PKGS_DIRS=$DATA_ROOT/conda_pkgs \
+#     micromamba create -p $DATA_ROOT/envs/msim -f config/metsim_environment.yml
+#   $DATA_ROOT/envs/msim/bin/python -m pip install "pandas>=2.2,<2.3"
+name: msim
+channels: [conda-forge]
+dependencies:
+  - python=3.11
+  - metsim=2.4.4
+  - netcdf4
+  - pandas

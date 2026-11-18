@@ -22,5 +22,5 @@ for r in nlcd2016:$DATA/raw/nlcd_2016_ak/NLCD_2016_Land_Cover_AK_20200724.img ev
     # consistency check against zonal_counts.py on 300 cells of the author's table
     python -I $REPO/scripts/defaults/cell_counts.py ${r#*:} $OUT/check_cells.csv $OUT/${r%%:*}_check_counts.npz &
 done
-[[ -f $OUT/glass_lai_L2.csv ]] || python -I $REPO/scripts/defaults/cell_lai.py $DATA/raw/glass_lai_2016_500m $CELLS $OUT/glass_lai_L2.csv &
+python -I $REPO/scripts/defaults/cell_lai.py $DATA/raw/glass_lai_2016_500m $CELLS $OUT/glass_lai_L2.csv &
 wait

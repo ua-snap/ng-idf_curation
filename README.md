@@ -21,6 +21,7 @@ Batch adaptations (none changes the method):
 | `ngidf/run_point.py` calls the app functions directly, the same path as `app.py:get_NG_IDF`, and reproduces the web form's rounding of inputs | Batch execution |
 | Land cover, LAI and height come from the author's Interior table where it covers the place. Elsewhere they come from a statewide rebuild from the same sources (NLCD 2016, GLASS LAI 2016, LANDFIRE 2016 EVH) on the same Daymet 1 km grid | The shipped table covers Interior AK only |
 | WRF/CESM station files are extracted from the NNA 4 km archive with the author's conversions | The app ships forcing for one cell. **Validated against the author's own station files to text precision** |
+| Daymet station files are rebuilt with the author's recipe: Daymet v4 daily P/Tmax/Tmin, MetSim (MTCLIM, 3-hourly, uniform precipitation), daily WRF wind, Bolton RH | The author's Daymet files cover Interior AK only. **Validated against them:** wind and P exact, T to 1e-4. SW and RH are within 0.3% where elevation sources differ |
 | The forcing cell is chosen with the app's own nearest-cell rule, applied over the full 4 km grid | Statewide coverage |
 | Snow parameters: the single Alaska row of the app's table | It is the only Alaska parameter set |
 | `set.seed()` per run before `get_IDF.R` | Reproducible bootstrap CI |
@@ -111,7 +112,12 @@ python -I scripts/defaults/build_place_defaults.py data/places/places_ak.csv \
 # forcing: one array per dataset (33 one-year blocks), then assemble + validate against the author's files
 sbatch --array=0-32%2 slurm/forcing_block.sbatch WRF_historical    # … for each of the 11 datasets
 sbatch slurm/forcing_assemble.sbatch WRF_historical
-# model runs
+# Daymet forcing (Daymet v4 1 km + MetSim 3-hourly + daily WRF wind, the author's recipe)
+python3 -I scripts/daymet/fetch_daymet_pixels.py data/places/places_ak.csv $DATA_ROOT/raw/daymet_v4_pixels
+sbatch --array=0-32%10 slurm/daymet_wind.sbatch                   # daily WRF-historical wind per Daymet cell
+sbatch --array=0-7 slurm/daymet_run.sbatch 8                      # MetSim → station files (env: config/metsim_environment.yml)
+$DATA_ROOT/envs/msim/bin/python -I ngidf/daymet_forcing.py validate --ours-dir $DATA_ROOT/work/forcing/Daymet
+# model runs (repeat with --datasets Daymet for the Daymet runs)
 python -I ngidf/run_batch.py manifest --forcing-root $DATA_ROOT/work/forcing --out $DATA_ROOT/work/runs.csv
 sbatch --array=0-7 slurm/run_batch.sbatch $DATA_ROOT/work/runs.csv 8
 # coverages
@@ -129,6 +135,6 @@ The forcing extraction, model runs and coverage assembly scripts are in place. N
 
 - the exact LAI and canopy-height products the author used;
 - the author's mapping for NLCD lichen/moss;
-- the author's Daymet/MetSim settings.
+- the elevation the author gave MetSim at some Interior cells. This causes a ≤ 0.3% shortwave difference.
 
 Rebuilt defaults are therefore labelled `rebuilt_provisional`. Tests show that LAI ±0.1 and height ±2 m move the 100-year NG values by at most 1.5% and leave precipitation curves unchanged.

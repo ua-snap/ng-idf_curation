@@ -17,6 +17,7 @@ import xarray as xr
 key, wrf_key, work, start, stop = sys.argv[1:6]
 opts = dict(a.split('=', 1) for a in sys.argv[6:])
 elev = float(opts.pop('elev', 'nan'))
+dec31 = opts.pop('dec31', 'mean')  # how to fill the leap-year Dec 31 Daymet omits: prev | next | mean
 work = Path(work); work.mkdir(parents=True, exist_ok=True)
 DATA = Path('/import/beegfs/SNAP/jdpaul3/ng-idf_curation_data')
 NGIDL = Path('/import/beegfs/CMIP6/arctic-cmip6/NG-IDL')
@@ -35,7 +36,12 @@ full = pd.date_range(dm.index.min(), dm.index.max() + pd.Timedelta(days=1), freq
 dm = dm.reindex(full)
 miss = dm.prcp.isna()
 dm.loc[miss, 'prcp'] = 0.0
-dm[['tmax', 'tmin']] = dm[['tmax', 'tmin']].ffill()
+if dec31 == 'prev':
+    dm[['tmax', 'tmin']] = dm[['tmax', 'tmin']].ffill()
+elif dec31 == 'next':
+    dm[['tmax', 'tmin']] = dm[['tmax', 'tmin']].bfill()
+else:
+    dm[['tmax', 'tmin']] = dm[['tmax', 'tmin']].interpolate()
 
 w = pd.read_csv(NGIDL / f'dhsvm_wrf_1hour/hist/data_{wrf_key}', sep=r'\s+', header=None,
                 names=['t', 'T', 'W', 'RH', 'SW', 'LW', 'P'], usecols=[0, 2])
@@ -68,7 +74,8 @@ params = dict(time_step='180', start=start, stop=stop, forcing=str(work / 'forci
               domain_vars={'lat': 'lat', 'lon': 'lon', 'mask': 'mask', 'elev': 'elev'},
               out_vars={'temp': {'out_name': 'temp'}, 'prec': {'out_name': 'prec'},
                         'shortwave': {'out_name': 'shortwave'}, 'longwave': {'out_name': 'longwave'},
-                        'rel_humid': {'out_name': 'rel_humid'}, 'wind': {'out_name': 'wind'}},
+                        'rel_humid': {'out_name': 'rel_humid'}, 'wind': {'out_name': 'wind'},
+                        'vapor_pressure': {'out_name': 'vapor_pressure'}},
               chunks={'lat': 1, 'lon': 1})
 for k, v in opts.items():
     params[k] = {'True': True, 'False': False}.get(v, v)
@@ -80,10 +87,20 @@ a = pd.read_csv(NGIDL / f'dhsvm_daymet_3hour/data_{key}', sep=r'\s+', header=Non
                 names=['t', 'T', 'W', 'RH', 'SW', 'LW', 'P'])
 a['time'] = pd.to_datetime(a.t, format='%m/%d/%Y-%H')
 m = a.merge(o.reset_index(), on='time')
-print(f'opts={opts} elev={elev} (daymet hdr {hdr_elev}) n={len(m)}')
-for ours, ref in [('temp', 'T'), ('wind', 'W'), ('rel_humid', 'RH'), ('shortwave', 'SW'), ('longwave', 'LW')]:
+# The author's RH: MetSim vapour pressure (kPa) with Bolton saturation (as in his WRF files), capped at 99.99
+m['rh_bolton'] = np.minimum(100 * m.vapor_pressure * 1000 / (611.2 * np.exp(17.67 * m.temp / (m.temp + 243.5))), 99.99)
+print(f'opts={opts} dec31={dec31} elev={elev} (daymet hdr {hdr_elev}) n={len(m)}')
+for ours, ref in [('temp', 'T'), ('wind', 'W'), ('rel_humid', 'RH'), ('rh_bolton', 'RH'), ('shortwave', 'SW'), ('longwave', 'LW')]:
     d = m[ours] - m[ref]
     print(f'  {ref:3s} maxabs {d.abs().max():9.4f} meanabs {d.abs().mean():8.4f} bias {d.mean():+8.4f}')
 d = m.prec / 1000 - m.P
 print(f'  P   maxabs {d.abs().max():.2e}')
 print(m[['t', 'T', 'temp', 'RH', 'rel_humid', 'SW', 'shortwave', 'LW', 'longwave']].head(8).round(3).to_string())
+m['month'] = m.time.dt.month
+m['dRH'] = m.rh_bolton - m.RH
+m['dT'] = m.temp - m['T']
+m['dLW'] = m.longwave - m.LW
+print(m.groupby('month')[['dRH', 'dT', 'dLW']].agg(lambda x: x.abs().mean()).round(3).T.to_string())
+print(m.loc[m.dT.abs() > 0.01, ['t', 'T', 'temp']].head(10).to_string())
+print(m.loc[m.dRH.abs() > 5, ['t', 'T', 'RH', 'rel_humid', 'P']].head(10).to_string())
+m.to_csv(work / 'compare.csv', index=False)

@@ -101,18 +101,46 @@ def load_run(runs_root, pid, ds):
     return np.load(p)
 
 
-def nodata_text(places, defaults):
-    off = places[places.wrf_cesm_status != 'ok']
-    parts = []
+def failed_runs(runs_root, places):
+    """Places whose DHSVM runs failed, with the DHSVM error line (the app would fail the same way)."""
+    out = {}
+    for pid in places.id:
+        d = Path(runs_root) / pid
+        if not d.exists():
+            continue
+        for rj in d.glob('*/run.json'):
+            if json.loads(rj.read_text()).get('status') == 'failed':
+                log = rj.parent / 'dhsvm.log'
+                msg = next((l.strip() for l in log.read_text().splitlines() if 'error' in l.lower()), 'DHSVM failed') \
+                    if log.exists() else 'run failed'
+                out.setdefault(pid, {}).setdefault(msg, []).append(rj.parent.name)
+    return out
+
+
+def nodata_text(places, defaults, failures=None):
+    def names(df):
+        return ', '.join(f'{r.id} {r.name}' for r in df.itertuples())
+    parts, listed = [], set()
+    nod = places.merge(defaults[['id', 'cover_code']], on='id') if defaults is not None else places.iloc[:0]
+    far = nod[(nod.cover_code < 0) & (nod.defaults_status != 'ok')] if 'defaults_status' in nod else nod.iloc[:0]
+    if len(far):
+        parts.append(f'All entries are nodata for {names(far)}: no Daymet land cell lies within 1.5 km '
+                     '(the app boundary rule), so the app would not run there.')
+        listed |= set(far.id)
+    nolc = nod[(nod.cover_code < 0) & ~nod.id.isin(listed)]
+    if len(nolc):
+        parts.append(f'All entries are nodata for {names(nolc)}: the 1 km cell has no NLCD land cover, '
+                     'so the app has no default inputs.')
+        listed |= set(nolc.id)
+    off = places[(places.wrf_cesm_status != 'ok') & ~places.id.isin(listed)]
     if len(off):
-        parts.append('No WRF or CESM forcing exists at ' + ', '.join(f'{r.id} {r.name} ({r.wrf_dist_km:.0f} km from the 4 km grid)'
-                     for r in off.itertuples()) + '; their WRF and CESM entries are nodata.')
-    if defaults is not None:
-        nod = places.merge(defaults[['id', 'cover_code']], on='id')
-        nod = nod[nod.cover_code < 0]
-        if len(nod):
-            parts.append(', '.join(f'{r.id} {r.name}' for r in nod.itertuples()) +
-                         ' lie in 1 km cells with no NLCD land cover, so the app has no default inputs for them; all their entries are nodata.')
+        parts.append(f'WRF and CESM entries are nodata for {names(off)}: the place lies outside the 4 km grid.')
+    for pid, msgs in (failures or {}).items():
+        name = places.loc[places.id == pid, 'name'].iloc[0]
+        for msg, dss in msgs.items():
+            msg = msg.replace('"', "'")
+            parts.append(f'{pid} {name}: DHSVM stopped for {len(dss)} dataset(s) with the message: {msg}. '
+                         'The app would stop the same way for these inputs, so those entries are nodata.')
     parts.append('Daymet entries are nodata wherever Daymet forcing is unavailable, and for 1 to 12 hour durations.')
     return ' '.join(parts)
 
@@ -197,7 +225,7 @@ def build(args):
         app_source=f"{app_env['APP_REPO']} branch {app_env['APP_BRANCH']} commit {commit}",
         processing_code=f'github.com/ua-snap ng-idf_curation commit {git_rev()}',
         places_source='earthmaps.io/places/communities, region Alaska (565 places), snapshot 2026-11-17',
-        nodata_locations=nodata_text(places, defaults),
+        nodata_locations=nodata_text(places, defaults, failed_runs(args.runs_root, places)),
         units='mm (depth over the duration); inches = mm / 25.4',
         creator='Scenarios Network for Alaska and Arctic Planning (SNAP), University of Alaska Fairbanks',
         date_created=dt.date.today().isoformat(),

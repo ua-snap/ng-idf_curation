@@ -56,8 +56,15 @@ evh_cnt = evh['counts']
 
 rows = []
 for p in places.itertuples(index=False):
-    k = key(p.defaults_lat, p.defaults_lon)
     r = dict(id=p.id)
+    if getattr(p, 'defaults_status', 'ok') != 'ok':
+        # no Daymet land cell within 1.5 km: the app treats the point as outside its boundary
+        r.update(nlcd_pixels=np.nan, nlcd_top_share=np.nan, nlcd_margin=np.nan, uses_provisional_nlcd_class=False,
+                 source_land_cover='unavailable', source_lai=np.nan, source_height_m=np.nan,
+                 land_cover='unavailable', cover_code=-1, lai=np.nan, height_m=np.nan, defaults_source='none')
+        rows.append(r)
+        continue
+    k = key(p.defaults_lat, p.defaults_lon)
     if k in tab:
         t = tab[k]
         cover, l, h, src = str(t.dominant_LULC).strip().lower(), float(t.max_LAI), float(t.mean_height_m), 'author_table'

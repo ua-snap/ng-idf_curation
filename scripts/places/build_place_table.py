@@ -11,6 +11,10 @@ Cell selection copies the app (H. Yan, NG_IDF_AWS @ a582a5c) exactly:
   over the full 662 x 782 NNA 4 km grid.
 * Daymet forcing cell: the same `find_nearest_coord` rule over the Daymet 1 km cells
   (the author's Daymet files use the same 72,406 cells as the defaults table).
+* Both 1 km searches consider Daymet **land** cells only: the author's table and Daymet
+  station files contain only cells where Daymet has data. The defaults cell must be within
+  1.5 km (app.py MAX_GRIDCELL_DISTANCE_KM); otherwise the app treats the point as outside
+  its boundary and the place is nodata.
 
 We also record the geographically nearest 4 km cell (great-circle) and flag places
 where the app's rule picks a different cell. A place is outside the WRF/CESM domain
@@ -22,6 +26,7 @@ Usage:
         --cesm-file <NNA file> --defaults-csv <gridcell_current_lulc.csv> --out <csv>
 """
 import argparse
+import sys
 import hashlib
 import json
 from pathlib import Path
@@ -35,6 +40,7 @@ DAYMET_LCC = ("+proj=lcc +lat_1=25 +lat_2=60 +lat_0=42.5 +lon_0=-100 +x_0=0 +y_0
               "+ellps=WGS84 +units=m +no_defs")
 FORCING_DOMAIN_KM = 4.0
 EARTH_RADIUS_KM = 6371.0
+MAX_GRIDCELL_DISTANCE_KM = 1.5  # app.py: lookup_gridcell_lulc boundary
 
 
 def sha256(path):
@@ -84,7 +90,13 @@ def main():
     ap.add_argument('--cesm-file', type=Path, required=True)
     ap.add_argument('--defaults-csv', type=Path, required=True, help="app's static/gridcell_current_lulc.csv")
     ap.add_argument('--out', type=Path, required=True)
+    ap.add_argument('--land-cache', type=Path, required=True, help='JSON cache of Daymet land status per cell')
+    ap.add_argument('--daymet-pixel-dir', type=Path, help='downloaded single-pixel CSVs (count as land)')
+    ap.add_argument('--offline', action='store_true', help='fail instead of querying the Daymet API')
     args = ap.parse_args()
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'ngidf'))
+    from daymet_land import LandChecker
+    land = LandChecker(args.land_cache, args.daymet_pixel_dir, online=not args.offline)
 
     places = [p for p in json.loads(args.communities.read_text()) if p.get('region') == 'Alaska']
     places.sort(key=lambda p: int(p['id'][2:]))
@@ -102,6 +114,8 @@ def main():
 
     table = pd.read_csv(args.defaults_csv)
     t_lat, t_lon = table.latitude.to_numpy(float), table.longitude.to_numpy(float)
+    for a_, b_ in zip(t_lat, t_lon):  # every cell of the author's table is a Daymet land cell
+        land.cache.setdefault(f'{a_:.5f}_{b_:.5f}', True)
 
     fwd = Transformer.from_crs('EPSG:4326', DAYMET_LCC, always_xy=True)
     inv = Transformer.from_crs(DAYMET_LCC, 'EPSG:4326', always_xy=True)
@@ -125,19 +139,34 @@ def main():
                    wrf_on_grid_edge=bool(y in (0, ny - 1) or x in (0, nx - 1)))
         in_domain = d_app <= FORCING_DOMAIN_KM
 
-        # --- Daymet 1 km cells ---
-        dlat, dlon, dxs, dys = daymet_candidates(lat, lon, fwd, inv)
-        i_def = int(np.argmin(app_equirect_km(lat, lon, dlat, dlon)))
-        i_met = int(np.argmin(app_degree_sq(lat, lon, dlat, dlon)))
-        row.update(defaults_lat=dlat[i_def], defaults_lon=dlon[i_def],
-                   defaults_lcc_x=dxs[i_def], defaults_lcc_y=dys[i_def],
-                   defaults_dist_km=round(float(app_equirect_km(lat, lon, dlat[i_def], dlon[i_def])), 3),
-                   daymet_lat=dlat[i_met], daymet_lon=dlon[i_met],
-                   daymet_key=f'{dlat[i_met]:.5f}_{dlon[i_met]:.5f}',
-                   daymet_differs_from_defaults=bool(i_met != i_def))
+        # --- Daymet 1 km cells: only Daymet land cells exist in the author's table and station files ---
+        dlat, dlon, dxs, dys = daymet_candidates(lat, lon, fwd, inv, radius=4)
+        keys = [f'{a:.5f}_{b:.5f}' for a, b in zip(dlat, dlon)]
+        d_def = app_equirect_km(lat, lon, dlat, dlon)
+        d_met = app_degree_sq(lat, lon, dlat, dlon)
+        # the app ignores cells farther than 1.5 km, so only those need a land check
+        i_def = next((int(i) for i in np.argsort(d_def, kind='stable')
+                      if d_def[i] <= MAX_GRIDCELL_DISTANCE_KM and land(keys[i])), None)
+        i_met = next((int(i) for i in np.argsort(d_met, kind='stable') if land(keys[i])), None)
+        if i_def is not None:
+            row.update(defaults_lat=dlat[i_def], defaults_lon=dlon[i_def],
+                       defaults_lcc_x=dxs[i_def], defaults_lcc_y=dys[i_def],
+                       defaults_dist_km=round(float(d_def[i_def]), 3), defaults_status='ok')
+        else:
+            row.update(defaults_lat=np.nan, defaults_lon=np.nan, defaults_lcc_x=np.nan, defaults_lcc_y=np.nan,
+                       defaults_dist_km=np.nan,
+                       defaults_status='no_land_cell_within_1.5km')
+        if i_met is not None:
+            row.update(daymet_lat=dlat[i_met], daymet_lon=dlon[i_met], daymet_key=keys[i_met], daymet_status='ok')
+        else:
+            row.update(daymet_lat=np.nan, daymet_lon=np.nan, daymet_key='', daymet_status='outside_daymet')
+        row['daymet_differs_from_defaults'] = bool(row['defaults_status'] == 'ok' and i_met != i_def)
+        # did the land restriction move the cell away from the unrestricted nearest?
+        row['defaults_moved_off_water'] = bool(i_def is not None and i_def != int(np.argmin(d_def)))
+        row['daymet_moved_off_water'] = bool(i_met is not None and i_met != int(np.argmin(d_met)))
 
         # --- Is the defaults cell in the author's Interior table? Cross-check with the app's lookup. ---
-        in_table = bool(np.any((t_lat == dlat[i_def]) & (t_lon == dlon[i_def])))
+        in_table = row['defaults_status'] == 'ok' and bool(np.any((t_lat == dlat[i_def]) & (t_lon == dlon[i_def])))
         row['in_author_defaults_table'] = in_table
         if in_table:
             j = int(np.argmin(app_equirect_km(lat, lon, t_lat, t_lon)))
@@ -146,10 +175,10 @@ def main():
                                  f"!= app lookup {t_lat[j]},{t_lon[j]}")
 
         row['wrf_cesm_status'] = 'ok' if in_domain else 'outside_forcing_domain'
-        # Daymet extent is checked when the Daymet data are acquired (P2/P3).
-        row['daymet_status'] = 'unchecked'
         rows.append(row)
 
+    land.save()
+    print(f'Daymet land checks: {land.queries} API queries', flush=True)
     df = pd.DataFrame(rows)
     df.insert(0, 'location_index', np.arange(len(df)))
     # Several places can share a 4 km cell; give each distinct cell an index for extraction.
@@ -166,7 +195,12 @@ def main():
                 wrf_grid_file=str(args.wrf_file), cesm_grid_file=str(args.cesm_file),
                 defaults_csv_sha256=sha256(args.defaults_csv), n_places=len(df),
                 n_ok=int(ok.sum()), n_forcing_cells=len(cells),
-                n_daymet_cells=int(df.loc[ok, 'daymet_key'].nunique()),
+                n_daymet_cells=int(df.loc[df.daymet_status == 'ok', 'daymet_key'].nunique()),
+                defaults_status=df.defaults_status.value_counts().to_dict(),
+                daymet_status=df.daymet_status.value_counts().to_dict(),
+                no_defaults_cell=df.loc[df.defaults_status != 'ok', ['id', 'name', 'defaults_dist_km']].to_dict('records'),
+                defaults_moved_off_water=df.loc[df.defaults_moved_off_water, 'id'].tolist(),
+                daymet_moved_off_water=df.loc[df.daymet_moved_off_water, 'id'].tolist(),
                 n_in_author_defaults_table=int(df.in_author_defaults_table.sum()),
                 outside_forcing_domain=df.loc[~ok, ['id', 'name', 'wrf_dist_km']].to_dict('records'),
                 on_grid_edge=df.loc[df.wrf_on_grid_edge, 'id'].tolist(),
