@@ -1,0 +1,95 @@
+{
+  "config": {
+    "service_url": "https://localhost/rasdaman/ows",
+    "tmp_directory": "/tmp/",
+    "default_null_values": [
+      "-9999"
+    ],
+    "mock": false,
+    "automated": true
+  },
+  "input": {
+    "coverage_id": "ngidf_places",
+    "paths": [
+      "/opt/rasdaman-storage/coverage_data/ngidf_places/ngidf_places.nc"
+    ]
+  },
+  "recipe": {
+    "name": "general_coverage",
+    "options": {
+      "tiling": "ALIGNED [0:7, 0:23, 0:1, 0:6, 0:50] tile size 2741760",
+      "wms_import": false,
+      "import_order": "ascending",
+      "coverage": {
+        "crs": "OGC/0/Index1D?axis-label=\"location\"@OGC/0/Index1D?axis-label=\"dataset\"@OGC/0/Index1D?axis-label=\"variable\"@OGC/0/Index1D?axis-label=\"duration\"@OGC/0/Index1D?axis-label=\"exceedance\"",
+        "metadata": {
+          "type": "xml",
+          "global": "auto"
+        },
+        "slicer": {
+          "type": "netcdf",
+          "pixelIsPoint": true,
+          "bands": [
+            {
+              "name": "magnitude",
+              "identifier": "magnitude",
+              "nilValue": "-9999"
+            },
+            {
+              "name": "ci_lower",
+              "identifier": "ci_lower",
+              "nilValue": "-9999"
+            },
+            {
+              "name": "ci_upper",
+              "identifier": "ci_upper",
+              "nilValue": "-9999"
+            },
+            {
+              "name": "member_min",
+              "identifier": "member_min",
+              "nilValue": "-9999"
+            },
+            {
+              "name": "member_max",
+              "identifier": "member_max",
+              "nilValue": "-9999"
+            }
+          ],
+          "axes": {
+            "location": {
+              "min": "${netcdf:variable:location:min}",
+              "max": "${netcdf:variable:location:max}",
+              "gridOrder": 0,
+              "resolution": 1
+            },
+            "dataset": {
+              "min": "${netcdf:variable:dataset:min}",
+              "max": "${netcdf:variable:dataset:max}",
+              "gridOrder": 1,
+              "resolution": 1
+            },
+            "variable": {
+              "min": "${netcdf:variable:variable:min}",
+              "max": "${netcdf:variable:variable:max}",
+              "gridOrder": 2,
+              "resolution": 1
+            },
+            "duration": {
+              "min": "${netcdf:variable:duration:min}",
+              "max": "${netcdf:variable:duration:max}",
+              "gridOrder": 3,
+              "resolution": 1
+            },
+            "exceedance": {
+              "min": "${netcdf:variable:exceedance:min}",
+              "max": "${netcdf:variable:exceedance:max}",
+              "gridOrder": 4,
+              "resolution": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}

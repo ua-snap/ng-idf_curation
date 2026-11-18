@@ -1,0 +1,16 @@
+#!/bin/bash
+#SBATCH --job-name=ngidf-infer-lai
+#SBATCH --partition=t2small
+#SBATCH --qos=tier2
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
+#SBATCH --time=01:00:00
+#SBATCH --output=/import/beegfs/SNAP/jdpaul3/ng-idf_curation_data/logs/%x_%j.out
+set -euo pipefail
+source ~/miniconda3/etc/profile.d/conda.sh
+set +u; conda activate snap-geo; set -u
+DATA=/import/beegfs/SNAP/jdpaul3/ng-idf_curation_data
+python -I /import/home/jdpaul3/ng-idf_curation/scripts/defaults/infer_lai.py $DATA/work/defaults_inference/glass_h11v02 \
+  /beegfs/SNAP/rltorgerson/Oct-NG-IDF/NG_IDF_AWS/static/gridcell_current_lulc.csv h11v02

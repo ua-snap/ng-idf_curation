@@ -1,0 +1,95 @@
+{
+  "config": {
+    "service_url": "https://localhost/rasdaman/ows",
+    "tmp_directory": "/tmp/",
+    "default_null_values": [
+      "-9999"
+    ],
+    "mock": false,
+    "automated": true
+  },
+  "input": {
+    "coverage_id": "ngidf_places_am",
+    "paths": [
+      "/opt/rasdaman-storage/coverage_data/ngidf_places_am/ngidf_places_am.nc"
+    ]
+  },
+  "recipe": {
+    "name": "general_coverage",
+    "options": {
+      "tiling": "ALIGNED [0:31, 0:11, 0:1, 0:6, 0:32] tile size 2483712",
+      "wms_import": false,
+      "import_order": "ascending",
+      "coverage": {
+        "crs": "OGC/0/Index1D?axis-label=\"location\"@OGC/0/Index1D?axis-label=\"dataset\"@OGC/0/Index1D?axis-label=\"variable\"@OGC/0/Index1D?axis-label=\"duration\"@OGC/0/Index1D?axis-label=\"am_index\"",
+        "metadata": {
+          "type": "xml",
+          "global": "auto"
+        },
+        "slicer": {
+          "type": "netcdf",
+          "pixelIsPoint": true,
+          "bands": [
+            {
+              "name": "am_depth",
+              "identifier": "am_depth",
+              "nilValue": "-9999"
+            },
+            {
+              "name": "water_year",
+              "identifier": "water_year",
+              "nilValue": "-9999"
+            },
+            {
+              "name": "peak_date",
+              "identifier": "peak_date",
+              "nilValue": "-9999"
+            },
+            {
+              "name": "mechanism",
+              "identifier": "mechanism",
+              "nilValue": "-9999"
+            },
+            {
+              "name": "used_in_fit",
+              "identifier": "used_in_fit",
+              "nilValue": "-9999"
+            }
+          ],
+          "axes": {
+            "location": {
+              "min": "${netcdf:variable:location:min}",
+              "max": "${netcdf:variable:location:max}",
+              "gridOrder": 0,
+              "resolution": 1
+            },
+            "dataset": {
+              "min": "${netcdf:variable:dataset:min}",
+              "max": "${netcdf:variable:dataset:max}",
+              "gridOrder": 1,
+              "resolution": 1
+            },
+            "variable": {
+              "min": "${netcdf:variable:variable:min}",
+              "max": "${netcdf:variable:variable:max}",
+              "gridOrder": 2,
+              "resolution": 1
+            },
+            "duration": {
+              "min": "${netcdf:variable:duration:min}",
+              "max": "${netcdf:variable:duration:max}",
+              "gridOrder": 3,
+              "resolution": 1
+            },
+            "am_index": {
+              "min": "${netcdf:variable:am_index:min}",
+              "max": "${netcdf:variable:am_index:max}",
+              "gridOrder": 4,
+              "resolution": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}

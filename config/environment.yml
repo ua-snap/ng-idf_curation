@@ -1,0 +1,22 @@
+# ngidf runtime env. Create with:
+#   CONDA_PKGS_DIRS=$DATA_ROOT/conda_pkgs conda env create -p $DATA_ROOT/envs/ngidf -f config/environment.yml
+# Exact versions: config/environment.lock.txt
+name: ngidf
+channels: [conda-forge]
+dependencies:
+  - python=3.12
+  - numpy
+  - pandas
+  - scipy
+  - netcdf4
+  - cftime
+  - pyproj
+  - xarray
+  - r-base
+  - r-lmom
+  - c-compiler
+  - make
+  - flex
+  - xorg-libx11
+  - xorg-xorgproto
+  - dos2unix
