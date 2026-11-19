@@ -111,12 +111,22 @@ Each stage writes into `stages/<stage>/<fingerprint>/`. The fingerprint is a has
 
 ```bash
 P="$NGIDF_ENV/bin/python -I ngidf/pipeline.py"        # any Python >= 3.9 works for the env stages
+$P info                                               # model version, curation commit, data root
 $P plan                                               # every stage: done / todo / waiting
 $P submit --stage places --wait                       # prepare + sbatch + finalize (manual use)
-$P prepare --stage runs; $P finalize --stage runs     # what the Prefect flow calls around its sbatch
+$P submit --stage runs; $P finalize --stage runs      # what the Prefect flow calls, waiting in between
+$P retire --stage runs                                # move a failed attempt aside to run it again
 $P adopt --stage forcing_WRF_historical --source <dir> --note "..."   # reuse outputs made before the pipeline
 $P release --name <name>                              # once every stage passed
 ```
+
+Every command prints one JSON document on stdout. The Prefect flow parses those documents.
+
+A stage's checks can be run again at any time with `finalize`, which leaves its outputs untouched.
+
+The "curation code committed" check asks whether that stage's own code files, the ones in its fingerprint, are in `HEAD`. Edits elsewhere in the repo do not mark it.
+
+The `qa` fingerprint includes every stage's check results, because the report shows them. Re-finalizing a stage whose checks change therefore rebuilds the report.
 
 ### A new model version
 
