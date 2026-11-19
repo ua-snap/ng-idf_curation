@@ -9,13 +9,16 @@ runs in. A stage whose directory already holds a passing report.json is skipped,
     app: app checkout -> DHSVM build -> reference runs -> production runs -> coverage -> QA;
   * nothing is ever overwritten: a changed stage gets a new directory.
 
-The Prefect flow (ua-snap/prefect, ng_idf/) drives it with `prepare` / `finalize` and submits the
-jobs itself; `submit` does the same from a shell for manual runs and tests.
+The Prefect flow (ua-snap/prefect, ng_idf/) drives it over SSH: `plan`, then `submit` for every
+stage that is ready, waits for the Slurm jobs, then `finalize`. Each command prints one JSON document
+on stdout (progress goes to stderr), which the flow parses.
 
+  python -I ngidf/pipeline.py info       [--model-version L]          # JSON: model, commit, paths
   python -I ngidf/pipeline.py plan       [--model-version L]          # JSON: all stages, status
   python -I ngidf/pipeline.py prepare    --stage S                    # create dir, job.env; JSON jobs
   python -I ngidf/pipeline.py finalize   --stage S                    # checks -> report.json
   python -I ngidf/pipeline.py submit     --stage S [--wait]           # prepare + sbatch (+ finalize)
+  python -I ngidf/pipeline.py retire     --stage S                    # move a failed attempt aside
   python -I ngidf/pipeline.py adopt      --stage S --source DIR       # register outputs made before
   python -I ngidf/pipeline.py release    --name N                     # collect reports of all stages
 """
@@ -94,6 +97,15 @@ def now():
 def git(*args, cwd=REPO):
     r = subprocess.run(['git', '-C', str(cwd), *args], capture_output=True, text=True)
     return r.stdout.strip() if r.returncode == 0 else None
+
+
+def uncommitted(files):
+    """The files whose content differs from the committed version at HEAD (or that are not committed)."""
+    out = []
+    for f in files:
+        if git('rev-parse', '--verify', '-q', f'HEAD:{f}') != git('hash-object', str(REPO / f)):
+            out.append(f)
+    return out
 
 
 class NotReady(Exception):
@@ -197,6 +209,11 @@ class Stage:
     def checks(self, ctx, out):
         """Return (checks, metrics, tables, summary_md)."""
         return [], {}, {}, ''
+
+
+def num(x):
+    """A measured difference for a check detail: 3 significant digits (0.0001, 7.6, 2.04), not 0.000100000000003."""
+    return 'n/a' if x is None else f'{x:.3g}'
 
 
 def check(name, ok, detail='', warn=False):
@@ -496,7 +513,7 @@ class ForcingStage(Stage):
             m = s[f'{var}_max']
             known = s.get('P_known_bucket_reset', 0) if var == 'P' else 0
             c.append(check(f'{var} matches the author to the printed precision', m is not None and m <= t,
-                           f'max |difference| {m}' + (f'; {known} hours differ only by the bucket-reset bug in the '
+                           f'max |difference| {num(m)}' + (f'; {known} hours differ only by the bucket-reset bug in the '
                                                      "author's script (PLAN.md 9.3, Q12)" if known else ''),
                            warn=bool(known)))
         return c, dict(shared_cells=s['cells']), dict(validation=v['cells']), ''
@@ -540,14 +557,14 @@ class DaymetForcingStage(ForcingStage):
         c = [check('one station file per Daymet cell', len(files) == v['expected_cells'],
                    f"{len(files)} files, {v['expected_cells']} cells"),
              check("P matches the author's files exactly", s['P_max'] is not None and s['P_max'] <= 1.01e-6,
-                   f"max |difference| {s['P_max']} m"),
+                   f"max |difference| {num(s['P_max'])} m"),
              check('T matches (known residual from the tmax/tmin swap, PLAN.md 9.3)', s['T_max'] <= 0.03,
-                   f"max |difference| {s['T_max']} C", warn=True),
+                   f"max |difference| {num(s['T_max'])} C", warn=True),
              check('wind matches (known: wind-cell rule, PLAN.md 9.3)', s['W_max'] <= 1.01e-4,
-                   f"max |difference| {s['W_max']} m/s in {s['W_cells_differ']} of {s['cells']} cells", warn=True),
+                   f"max |difference| {num(s['W_max'])} m/s in {s['W_cells_differ']} of {s['cells']} cells", warn=True),
              check('SW/LW/RH match (known: MetSim elevation source, PLAN.md 9.3)',
                    max(s['SW_max'], s['LW_max'], s['RH_max']) <= 1.01e-4,
-                   f"max |difference| SW {s['SW_max']}, LW {s['LW_max']}, RH {s['RH_max']}", warn=True)]
+                   f"max |difference| SW {num(s['SW_max'])}, LW {num(s['LW_max'])}, RH {num(s['RH_max'])}", warn=True)]
         return c, dict(shared_cells=s['cells']), dict(validation=v['cells']), ''
 
 
@@ -733,6 +750,14 @@ class CoverageStage(Stage):
         return c, dict(ci_level_percent=s.get('ci_level_percent')), dict(places_per_dataset=counts), ''
 
 
+def report_checks(ctx, name):
+    rep = ctx.stage_dir(name) / 'report.json'
+    if not rep.exists():
+        return None
+    r = json.loads(rep.read_text())
+    return [r['status'], [[c['name'], c['status'], c['detail']] for c in r['checks']]]
+
+
 class QaStage(Stage):
     name = 'qa'
     title = 'Quality checks and report'
@@ -754,7 +779,9 @@ class QaStage(Stage):
         return dict(coverage=ctx.fingerprint('coverage'), env=ctx.fingerprint('env_report'),
                     baseline=str(b) if b else None,
                     baseline_hash=sha256_file(b / 'ngidf_places.nc') if b else None,
-                    stages={s.name: ctx.fingerprint(s.name) for s in STAGE_LIST if s.name != self.name})
+                    stages={s.name: ctx.fingerprint(s.name) for s in STAGE_LIST if s.name != self.name},
+                    # the report shows every stage's checks, so it is rebuilt when they change
+                    reports=hash_obj({s.name: report_checks(ctx, s.name) for s in STAGE_LIST if s.name != self.name}))
 
     def env(self, ctx):
         b = self.baseline_coverage(ctx)
@@ -792,7 +819,7 @@ class QaStage(Stage):
         if cmp_f.exists():
             k = json.loads(cmp_f.read_text())
             c.append(check('identical to the baseline release', k['identical'] and not k['lost_values'],
-                           f"{k['compared']} values; max |difference| {k['max_abs_diff_mm']} mm; "
+                           f"{k['compared']} values; max |difference| {num(k['max_abs_diff_mm'])} mm; "
                            f"{k['new_values']} new, {k['lost_values']} no longer present (review section 7)", warn=True))
         return c, dict(fits=fit['fits']), {}, ''
 
@@ -821,7 +848,11 @@ def status(ctx, name):
         return dict(stage=name, status='waiting', reason=str(e))
     rep = d / 'report.json'
     st = json.loads(rep.read_text())['status'] if rep.exists() else ('prepared' if (d / 'stage.json').exists() else 'todo')
-    return dict(stage=name, status=st, fingerprint=ctx.fingerprint(name), dir=str(d))
+    res = dict(stage=name, status=st, fingerprint=ctx.fingerprint(name), dir=str(d),
+               needs=list(STAGES[name].needs))
+    if st == 'prepared':    # submitted by an earlier run that did not finalize; its jobs may still be running
+        res['job_ids'] = json.loads((d / 'stage.json').read_text()).get('job_ids', [])
+    return res
 
 
 def job_env(ctx, st, d):
@@ -863,8 +894,12 @@ def finalize(ctx, name, job_ids=None):
         a = json.loads((d / 'adopted.json').read_text())
         checks.insert(0, check('outputs produced by this pipeline (not adopted)', False,
                                f"adopted from {a['source']} ({a['note']}); checked again now", warn=True))
-    if ctx.dirty:
-        checks.append(check('curation code committed', False, 'the repo had uncommitted changes', warn=True))
+    # The fingerprint pins the content of the stage's code files, so if HEAD holds that content the
+    # outputs are reproducible from this commit, whatever else in the repo is being edited.
+    loose = uncommitted(sorted(meta['components']['code']))
+    checks.append(check('curation code committed', not loose,
+                        f"the stage's code is in commit {(ctx.commit or '?')[:7]}" if not loose else
+                        'not committed: ' + ', '.join(loose), warn=True))
     order = {'fail': 2, 'warn': 1, 'pass': 0}
     worst = max((order[c['status']] for c in checks), default=0)
     report = dict(stage=name, title=st.title, explain=st.explain, status={0: 'pass', 1: 'warn', 2: 'fail'}[worst],
@@ -928,11 +963,14 @@ def run_login(prep, job):
 
 
 def wait(job_ids, poll=30):
+    # List the user's own jobs rather than `squeue -j <ids>`: once a finished job has aged out of
+    # Slurm's memory, -j fails with "Invalid job id" and the wait would never end.
     pending = set(job_ids)
+    user = os.environ.get('USER') or subprocess.run(['whoami'], capture_output=True, text=True).stdout.strip()
     while pending:
-        r = subprocess.run(['squeue', '-h', '-o', '%A', '-j', ','.join(pending)], capture_output=True, text=True)
-        alive = set(r.stdout.split()) if r.returncode == 0 else pending
-        pending &= alive
+        r = subprocess.run(['squeue', '-h', '-o', '%A', '-u', user], capture_output=True, text=True)
+        if r.returncode == 0:   # a failed squeue (transient) keeps everything pending
+            pending &= set(r.stdout.split())
         if pending:
             time.sleep(poll)
 
@@ -945,18 +983,32 @@ def submit(ctx, name, do_wait):
             run_login(prep, job)
             continue
         ids[job['name']] = sbatch(ctx, prep, job, [ids[a] for a in job['after'] if a in ids])
-        print(f"submitted {name}/{job['name']} as job {ids[job['name']]}", flush=True)
+        print(f"submitted {name}/{job['name']} as job {ids[job['name']]}", file=sys.stderr, flush=True)
     meta_p = Path(prep['dir']) / 'stage.json'
     meta = json.loads(meta_p.read_text())
     meta['job_ids'] = list(ids.values())
     meta_p.write_text(json.dumps(meta, indent=1) + '\n')
-    if do_wait or not ids:
+    res = dict(stage=name, dir=prep['dir'], job_ids=list(ids.values()), finalized=False, status='submitted')
+    if do_wait or not ids:      # login-only stages are finished when submit returns
         wait(list(ids.values()))
         rep = finalize(ctx, name, list(ids.values()))
-        print(json.dumps(dict(stage=name, status=rep['status'],
-                              checks=[f"{c['status']}: {c['name']} {c['detail']}" for c in rep['checks']]), indent=1))
-        return rep
-    return prep
+        res.update(finalized=True, status=rep['status'],
+                   checks=[f"{c['status']}: {c['name']} {c['detail']}" for c in rep['checks']])
+    return res
+
+
+def retire(ctx, name):
+    """Move a failed or interrupted attempt to <dir>.retired-<time> so the stage can run again from an
+    empty directory. The old attempt (logs, report) is kept for the record; passing stages are refused."""
+    d = ctx.stage_dir(name)
+    st = status(ctx, name)['status']
+    if st in ('pass', 'warn'):
+        raise SystemExit(f'{name} has passed ({d}); passing stages are never retired')
+    if not d.exists():
+        return dict(stage=name, retired=None)
+    dest = d.with_name(d.name + '.retired-' + dt.datetime.now().strftime('%Y%m%dT%H%M%S'))
+    d.rename(dest)
+    return dict(stage=name, status_was=st, retired=str(dest))
 
 
 def release(ctx, name):
@@ -989,7 +1041,8 @@ def main():
     ap.add_argument('--data-root')
     sub = ap.add_subparsers(dest='cmd', required=True)
     sub.add_parser('plan')
-    for c in ('prepare', 'finalize', 'submit', 'adopt', 'fingerprint'):
+    sub.add_parser('info')
+    for c in ('prepare', 'finalize', 'submit', 'adopt', 'fingerprint', 'retire'):
         p = sub.add_parser(c)
         p.add_argument('--stage', required=True, choices=list(STAGES))
         if c == 'submit':
@@ -1003,7 +1056,14 @@ def main():
     r.add_argument('--name', required=True)
     a = ap.parse_args()
     ctx = Context(a.model_version, a.data_root)
-    if a.cmd == 'plan':
+    if a.cmd == 'info':
+        print(json.dumps(dict(model_file=str(ctx.model_file.relative_to(REPO)), model=ctx.model,
+                              curation_commit=ctx.commit, curation_dirty=ctx.dirty,
+                              curation_branch=git('rev-parse', '--abbrev-ref', 'HEAD'),
+                              curation_remote=git('remote', 'get-url', 'origin'), data_root=str(ctx.data_root),
+                              slurm=dict(partition=ctx.paths['SLURM_PARTITION'], qos=ctx.paths['SLURM_QOS'])),
+                         indent=1))
+    elif a.cmd == 'plan':
         print(json.dumps([status(ctx, s.name) | dict(title=s.title) for s in STAGE_LIST], indent=1))
     elif a.cmd == 'fingerprint':
         print(json.dumps(dict(fingerprint=ctx.fingerprint(a.stage), components=ctx.components(a.stage)), indent=1))
@@ -1014,7 +1074,11 @@ def main():
         print(json.dumps({k: rep[k] for k in ('stage', 'status', 'checks', 'metrics')}, indent=1, default=str))
         sys.exit(1 if rep['status'] == 'fail' else 0)
     elif a.cmd == 'submit':
-        submit(ctx, a.stage, a.wait)
+        res = submit(ctx, a.stage, a.wait)
+        print(json.dumps(res, indent=1))
+        sys.exit(1 if res['status'] == 'fail' else 0)
+    elif a.cmd == 'retire':
+        print(json.dumps(retire(ctx, a.stage), indent=1))
     elif a.cmd == 'adopt':
         print(adopt(ctx, a.stage, a.source, a.note))
     elif a.cmd == 'release':
