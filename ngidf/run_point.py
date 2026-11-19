@@ -25,11 +25,16 @@ The shim differs from the app's own directory in these batch adaptations only:
   in the R library of our environment) and `set.seed(<seed>)` is prepended so the
   bootstrap CI is reproducible. Nothing else in the script changes.
 
+Each run also saves `adaptations.diff` (a unified diff of every file the shim changes or adds,
+against the app's original) and `config_vs_template.diff` (the DHSVM config the app wrote, against
+the app's template), so the batch adaptations can be checked run by run.
+
 The UI round-trip is reproduced too: the form holds lat/lon to 5 dp, LAI to 2 dp, and
 height in feet to 2 dp, which app.py converts back with * 0.3048.
 """
 import argparse
 import contextlib
+import difflib
 import io
 import json
 import os
@@ -43,6 +48,8 @@ import time
 import zlib
 
 import numpy as np
+
+sys.dont_write_bytecode = True  # importing the app must not rewrite the .pyc files its repo tracks
 
 ADVANCED_DEFAULTS = [0.001, 0.005, 0.02, 0.6]  # NG_IDF.html applyGridcellDefaults
 NUM_PROB = 51
@@ -102,6 +109,34 @@ def build_shim(shim, app_dir, dhsvm_bin, forcing_type, cell_key, forcing_file, s
     (shim / 'get_IDF.R').write_text(f'set.seed({seed})  # ngidf batch adaptation\n' + r)
 
 
+def _diff(a_text, b_text, a_name, b_name):
+    return ''.join(difflib.unified_diff(a_text.splitlines(True), b_text.splitlines(True), a_name, b_name, n=1))
+
+
+def _text(path):
+    """File text with a final newline. Some app files end without one; comparing them as-is would glue
+    their last line to the next in the diff. The note below the diff says which files."""
+    t = path.read_text() if path.exists() else ''
+    return t if not t or t.endswith('\n') else t + '\n'
+
+
+def adaptations_diff(shim, app_dir):
+    """Unified diff of every shim file that differs from (or is absent in) the app checkout."""
+    parts, no_eol = [], []
+    files = [(app_dir / rel, shim / rel, rel) for rel in ['get_IDF.R', 'example_config/param_5cluster_ensembleMean_CONUS.csv']]
+    files += [(app_dir / 'static' / f.name, f, f'static/{f.name}') for f in sorted((shim / 'static').iterdir())]
+    for a, b, rel in files:
+        if a.exists() and a.stat().st_size and not a.read_bytes().endswith(b'\n'):
+            no_eol.append(rel)
+        parts.append(_diff(_text(a), _text(b), f'app/{rel}', f'run/{rel}'))
+    for rel in ['dhsvm/no_sat_dump/DHSVM3.2'] + [str(p.relative_to(shim)) for p in (shim / 'met').rglob('data_*')]:
+        parts.append(f'--- app/{rel}\n+++ run/{rel} -> {os.readlink(shim / rel)}\n')
+    if no_eol:
+        parts.append(f'# the app files {", ".join(no_eol)} end without a newline; compared as if they had one\n')
+    parts.append('# unchanged copies of the app: input/, example_config/ (except the file above)\n')
+    return ''.join(parts)
+
+
 def read_idf(path):
     """app.py read_idf + np.round(…, 2)."""
     data = np.full((3, NUM_PROB), np.nan)
@@ -136,6 +171,7 @@ def run(args):
         seeds = {w: seed_for(args.place_id, forcing_type, w) for w in windows}
         build_shim(shim, app_dir, Path(args.dhsvm_bin).resolve(), forcing_type, args.cell_key, args.forcing_file,
                    seeds['full'])
+        (out / 'adaptations.diff').write_text(adaptations_diff(shim, app_dir))
         sys.path.insert(0, str(app_dir))
         os.chdir(shim)
         import dhsvm_idf
@@ -151,6 +187,9 @@ def run(args):
         proc = subprocess.run(['./dhsvm/no_sat_dump/DHSVM3.2', config_file], capture_output=True, text=True)
         (out / 'dhsvm.log').write_text(proc.stdout[-20000:] + '\n--- stderr ---\n' + proc.stderr[-20000:])
         shutil.copy2(config_file, out / 'Input.Snotel.T4')
+        (out / 'config_vs_template.diff').write_text(_diff(
+            (app_dir / 'example_config/Input.Snotel.T4').read_text(errors='replace'),
+            Path(config_file).read_text(errors='replace'), 'app/example_config/Input.Snotel.T4', 'run/Input.Snotel.T4'))
         pixel_file = td / 'Pixel.CENTER'
         if proc.returncode != 0 or not pixel_file.exists():
             raise RuntimeError(f'DHSVM failed (exit {proc.returncode}); see {out}/dhsvm.log')

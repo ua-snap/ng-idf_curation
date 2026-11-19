@@ -6,12 +6,12 @@ Phase 1 (this repo, now) covers the places. Phase 2 (planned) will cover the 4 k
 
 ## Method: the author's app, 100%
 
-We are not hydrologists. **Every scientific choice follows Hongxiang Yan's NG-IDF app**: [`hydro-yan/NG_IDF_AWS`](https://github.com/hydro-yan/NG_IDF_AWS), branch `feature/add_spatial_map`, commit `a582a5c` (pinned in [`config/app.env`](config/app.env)). For each place and forcing dataset we run the app's own code:
+We are not hydrologists. **Every scientific choice follows Hongxiang Yan's NG-IDF app**: [`hydro-yan/NG_IDF_AWS`](https://github.com/hydro-yan/NG_IDF_AWS), branch `feature/add_spatial_map`, commit `a582a5c` (pinned in [`config/model_versions/a582a5c.env`](config/model_versions/a582a5c.env)). For each place and forcing dataset we run the app's own code:
 
 1. `dhsvm_idf.generate_ng_idf` writes the DHSVM 3.2 configuration for the app's 3×3 point domain.
 2. DHSVM 3.2, built from the app's source, simulates the full period.
 3. `extract_AM.extract_AM_data` computes water-year annual maxima of 1, 3, 6, 12, 24, 48 and 72 h moving sums. It does this for precipitation (P) and for water reaching the ground (W_veg, the "NG" variable).
-4. `get_IDF.R` (R `lmom`) drops the first annual maximum and fits a Gumbel distribution by L-moments. It reports quantiles at 51 non-exceedance probabilities (0.50–0.99 by 0.01, plus 0.998), with a 90% CI from a 500-sample parametric bootstrap.
+4. `get_IDF.R` (R `lmom`) drops the first annual maximum and fits a Gumbel distribution by L-moments. It reports quantiles at 51 non-exceedance probabilities (0.50–0.99 by 0.01, plus 0.998), with a confidence interval from a 500-sample parametric bootstrap (90% at `a582a5c`; the level is read from `get_IDF.R`, and the author's next version uses 95%).
 5. Values are rounded to 0.01 mm, as in the app. They are depths in mm over the duration.
 
 Batch adaptations (none changes the method):
@@ -53,7 +53,7 @@ Bands are float32, in mm, with nodata −9999:
 | Band | Meaning |
 |---|---|
 | `magnitude` | Fitted depth |
-| `ci_lower`, `ci_upper` | 90% CI. Nodata for the ensemble-mean rows; the app computes none |
+| `ci_lower`, `ci_upper` | Confidence interval (level in the band metadata; 90% at `a582a5c`). Nodata for the ensemble-mean rows; the app computes none |
 | `member_min`, `member_max` | Ensemble-mean rows only: the range of the 4 CESM members, which the app shades |
 
 The ensemble mean is the arithmetic mean of the 4 members' magnitudes, as in the app.
@@ -75,59 +75,57 @@ Run inputs per place (forcing cells, land cover, LAI, height, and whether they c
 ## Layout
 
 ```
-config/            app pin (app.env), conda env spec + lock
-data/places/       generated tables (not tracked): places_ak.csv, place_defaults.csv
-ngidf/             forcing.py (extract/assemble/validate), run_point.py, run_batch.py, build_coverage.py
-scripts/setup/     fetch_app.sh (pinned sparse clone), build_dhsvm.sh
+config/            model_versions/<label>.env (which app commit), paths.env (site paths), env.sh (job setup),
+                   conda lock files: environment (runs), metsim, geo (rasters), report
+data/places/       tables from the pre-pipeline runs (not tracked)
+ngidf/             pipeline.py (stage runner), appinfo.py (method settings read from the app's code),
+                   forcing.py, daymet_forcing.py, run_point.py, run_batch.py, build_coverage.py, inputs_audit.py
+ngidf/qa/          model_change.py, run_qa.py, compare_release.py, report.py (HTML report)
+scripts/setup/     fetch_app.sh (pinned app), build_dhsvm.sh, create_env.sh
 scripts/places/    build_place_table.py
-scripts/defaults/  reverse-engineering of the author's defaults table + per-place defaults
-scripts/tests/     smoke test on the author's own forcing
+scripts/defaults/  defaults rebuild (cell_counts.py, cell_lai.py, build_place_defaults.py) + reverse-engineering
+scripts/tests/     reference_runs.py (author's own inputs; comparison with his app output)
+slurm/stages/      one job script per pipeline stage; slurm/*.sbatch are research jobs outside the pipeline
 recipes/           wcst_import recipes (not ingested)
-slurm/             job scripts (t2small / tier2)
 ```
 
-Large data lives outside the repo, in `/import/beegfs/SNAP/jdpaul3/ng-idf_curation_data/`:
+Large data lives outside the repo, in `DATA_ROOT` (`config/paths.env`):
 
 | Directory | Contents |
 |---|---|
-| `raw/` | Downloaded inputs |
-| `app/` | Pinned app checkout |
-| `envs/` | Conda environments |
-| `build/` | DHSVM build |
-| `work/` | Intermediates |
-| `runs/` | Per-run outputs |
-| `output/` | Coverage files |
+| `raw/` | Downloaded inputs, with `SHA256SUMS` |
+| `stages/<stage>/<fingerprint>/` | Pipeline stage outputs: `out/`, `logs/`, `job.env`, `stage.json`, `report.json` |
+| `releases/<name>/` | `release.json`, all stage reports, `report.html`, link to the coverage |
+| `envs/`, `app/`, `work/`, `runs/`, `output/` | From before the pipeline (2026-11-17); some are adopted by stages |
 
-## Reproduce
+## Pipeline
+
+`ngidf/pipeline.py` runs the work as stages:
+
+1. Environments, app checkout and source-data checksums.
+2. Places, defaults, and the forcing (11 WRF/CESM datasets and Daymet).
+3. DHSVM build, then reference runs on the author's own inputs.
+4. Production runs, then coverage, then QA and the HTML report.
+
+Each stage writes into `stages/<stage>/<fingerprint>/`. The fingerprint is a hash of exactly what the stage reads: its code, input content, parameters and environment. A stage whose report passed is skipped, and nothing is overwritten. The Prefect flow (`ua-snap/prefect`, `ng_idf/`) drives the same commands and turns each stage's `report.json` into artifacts.
 
 ```bash
-source config/app.env
-scripts/setup/fetch_app.sh                                   # pinned app → $DATA_ROOT/app/NG_IDF_AWS
-CONDA_PKGS_DIRS=$DATA_ROOT/conda_pkgs conda env create -p $NGIDF_ENV -f config/environment.yml
-# (DHSVM is built by the smoke-test job, or directly: conda activate $NGIDF_ENV && scripts/setup/build_dhsvm.sh)
-python -I scripts/places/build_place_table.py ...            # see the script docstring
-sbatch slurm/place_defaults_inputs.sbatch                    # NLCD/EVH/GLASS per defaults cell
-python -I scripts/defaults/build_place_defaults.py data/places/places_ak.csv \
-    $DATA_ROOT/app/NG_IDF_AWS/static/gridcell_current_lulc.csv $DATA_ROOT/work/place_defaults data/places/place_defaults.csv
-# forcing: one array per dataset (33 one-year blocks), then assemble + validate against the author's files
-sbatch --array=0-32%2 slurm/forcing_block.sbatch WRF_historical    # … for each of the 11 datasets
-sbatch slurm/forcing_assemble.sbatch WRF_historical
-# Daymet forcing (Daymet v4 1 km + MetSim 3-hourly + daily WRF wind, the author's recipe)
-python3 -I scripts/daymet/fetch_daymet_pixels.py data/places/places_ak.csv $DATA_ROOT/raw/daymet_v4_pixels
-sbatch --array=0-32%10 slurm/daymet_wind.sbatch                   # daily WRF-historical wind per Daymet cell
-sbatch --array=0-7 slurm/daymet_run.sbatch 8                      # MetSim → station files (env: config/metsim_environment.yml)
-$DATA_ROOT/envs/msim/bin/python -I ngidf/daymet_forcing.py validate --ours-dir $DATA_ROOT/work/forcing/Daymet
-# model runs (repeat with --datasets Daymet for the Daymet runs)
-python -I ngidf/run_batch.py manifest --forcing-root $DATA_ROOT/work/forcing --out $DATA_ROOT/work/runs.csv
-sbatch --array=0-7 slurm/run_batch.sbatch $DATA_ROOT/work/runs.csv 8
-# coverages
-python -I ngidf/build_coverage.py --runs-root $DATA_ROOT/runs --out-dir $DATA_ROOT/output
+P="$NGIDF_ENV/bin/python -I ngidf/pipeline.py"        # any Python >= 3.9 works for the env stages
+$P plan                                               # every stage: done / todo / waiting
+$P submit --stage places --wait                       # prepare + sbatch + finalize (manual use)
+$P prepare --stage runs; $P finalize --stage runs     # what the Prefect flow calls around its sbatch
+$P adopt --stage forcing_WRF_historical --source <dir> --note "..."   # reuse outputs made before the pipeline
+$P release --name <name>                              # once every stage passed
 ```
 
-Before ingesting, follow the `rasdaman-audit` checklist:
+### A new model version
 
-1. Run `wcst_import.sh recipes/ngidf_places.json --analyze`.
-2. Check the metadata: `ncdump -h ngidf_places.nc | python3 rasdaman_metadata_check.py --text -`.
+1. Mirror the upstream commit into `ua-snap/NG_IDF` as tag `app-<sha7>`.
+2. Copy `config/model_versions/a582a5c.env` to `<sha7>.env` and set the commit. Set `BASELINE_MODEL` to the previous label.
+3. Write the label to `config/model_versions/CURRENT`, or pass `--model-version`.
+4. Run the pipeline.
+
+Only the stages that read the app rerun: app, DHSVM build, reference, runs, coverage and QA. The app stage then reports what changed in the author's code, including method settings such as the CI level and the `Pixel.CENTER` columns. The QA report compares the new curves with the baseline release.
 
 ## Status
 

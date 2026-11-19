@@ -4,6 +4,9 @@
   run       Execute a slice of the manifest (Slurm array task), N runs in parallel.
             Each run is a separate process (run_point.py) working in node-local /tmp.
             Runs whose run.json says status=ok are skipped, so the job can be resubmitted.
+            A run where the model itself stops (run.json status=failed, e.g. DHSVM error 48) is a
+            result, as it would be in the app: the task still exits 0. A task exits 1 only when a
+            run left no run.json (infrastructure problem), so retrying the task makes sense.
   status    Summarise run outcomes.
 """
 import argparse
@@ -71,10 +74,15 @@ def run_one(row, args):
     if args.keep_pixel:
         cmd.append('--keep-pixel')
     r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode:
-        out.mkdir(parents=True, exist_ok=True)
-        (out / 'stderr.log').write_text(r.stderr[-20000:])
-    return row.place_id, row.dataset, 'ok' if r.returncode == 0 else f'FAILED rc={r.returncode}'
+    if r.returncode == 0:
+        return row.place_id, row.dataset, 'ok'
+    out.mkdir(parents=True, exist_ok=True)
+    (out / 'stderr.log').write_text(r.stderr[-20000:])
+    try:
+        recorded = json.loads(rj.read_text()).get('status') == 'failed'
+    except (OSError, json.JSONDecodeError):
+        recorded = False
+    return row.place_id, row.dataset, 'model-failed (recorded)' if recorded else f'FAILED rc={r.returncode}'
 
 
 def cmd_run(args):
@@ -86,7 +94,7 @@ def cmd_run(args):
         for pid, ds, st in ex.map(lambda r: run_one(r, args), part.itertuples(index=False)):
             print(pid, ds, st, flush=True)
             fails += st.startswith('FAILED')
-    print(f'done; {fails} failed', flush=True)
+    print(f'done; {fails} runs without a result', flush=True)
     sys.exit(1 if fails else 0)
 
 

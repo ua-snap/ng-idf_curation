@@ -30,8 +30,9 @@ import tempfile
 import numpy as np
 import pandas as pd
 
-WRF_HIST = Path('/import/beegfs/CMIP6/arctic-cmip6/NG-IDL-Full-Forcing/whole_AK_forcing/WRF/historical/hsf')
-NGIDL_DAYMET = Path('/import/beegfs/CMIP6/arctic-cmip6/NG-IDL/dhsvm_daymet_3hour')
+WRF_HIST = Path(os.environ.get('RAW_FORCING_ROOT', '/import/beegfs/CMIP6/arctic-cmip6/NG-IDL-Full-Forcing/whole_AK_forcing'),
+                'WRF/historical/hsf')
+NGIDL_DAYMET = Path(os.environ.get('AUTHOR_FORCING_ROOT', '/import/beegfs/CMIP6/arctic-cmip6/NG-IDL'), 'dhsvm_daymet_3hour')
 START, STOP = '1989-06-01', '2021-09-30'
 
 
@@ -232,6 +233,19 @@ def cmd_validate(args):
     pd.set_option('display.width', 250)
     print(df.to_string())
     print(df.drop(columns='cell').agg(['min', 'median', 'max']).to_string())
+    if args.json:
+        expected = None
+        if args.places:
+            pl = pd.read_csv(args.places)
+            expected = int(pl.loc[pl.daymet_status == 'ok', 'daymet_key'].nunique())
+        summ = dict(cells=len(df))
+        for c in cols[1:]:
+            summ[f'{c}_max'] = float(df[f'{c}_max'].max()) if len(df) else None
+            summ[f'{c}_median'] = float(df[f'{c}_max'].median()) if len(df) else None
+            summ[f'{c}_cells_differ'] = int((df[f'{c}_max'] > (1.01e-6 if c == 'P' else 1.01e-4)).sum()) if len(df) else None
+        Path(args.json).write_text(json.dumps(dict(ours_dir=str(args.ours_dir), ref_dir=str(NGIDL_DAYMET),
+                                                   expected_cells=expected, summary=summ,
+                                                   cells=df.to_dict('records')), indent=1) + '\n')
 
 
 def main():
@@ -258,6 +272,8 @@ def main():
     c.set_defaults(func=cmd_compact_wind)
     v = sub.add_parser('validate')
     v.add_argument('--ours-dir', required=True)
+    v.add_argument('--json', help='also write the comparison as JSON (pipeline report)')
+    v.add_argument('--places', help='place table, to record the expected number of station files')
     v.set_defaults(func=cmd_validate)
     args = ap.parse_args()
     args.func(args)

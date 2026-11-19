@@ -15,12 +15,15 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import sys
 
 import numpy as np
 import pandas as pd
 from netCDF4 import Dataset
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / 'ngidf'))
+import appinfo  # noqa: E402  (method settings read from the app's own code)
 FILL = -9999.0
 DURATIONS = [1, 3, 6, 12, 24, 48, 72]
 PROBS = [round(0.50 + 0.01 * i, 2) for i in range(50)] + [0.998]
@@ -52,14 +55,14 @@ AM_DATASETS = [d for d in DATASETS if d[2] == 'full' and d[1] is not None]
 
 METHOD = (
     "These curves reproduce the NG-IDF web application of Hongxiang Yan (PNNL), "
-    "github.com/hydro-yan/NG_IDF_AWS, branch feature/add_spatial_map, commit {commit}, exactly as implemented. "
+    "{upstream}, branch {branch}, commit {commit}, exactly as implemented. "
     "SNAP did not change any scientific choice: we are not hydrologists, so the author's method is used 100 percent. "
     "For each place and forcing dataset the app's own code was run: dhsvm_idf.generate_ng_idf writes the DHSVM 3.2 "
     "configuration for a 3x3 point domain, DHSVM 3.2 (built from the app's source) simulates the full period, "
     "extract_AM.extract_AM_data computes water-year annual maxima of moving-window sums for 1, 3, 6, 12, 24, 48 and 72 hours "
     "for precipitation (P) and water reaching the ground (W_veg), and get_IDF.R (R package lmom) drops the first annual "
     "maximum, fits a Gumbel distribution by L-moments, and reports quantiles at 51 non-exceedance probabilities "
-    "(0.50 to 0.99 by 0.01, plus 0.998) with a 90 percent confidence interval from 500 parametric bootstrap samples. "
+    "(0.50 to 0.99 by 0.01, plus 0.998) with a {ci:g} percent confidence interval from {nsim} parametric bootstrap samples. "
     "Values are depths in millimetres over the duration, rounded to 0.01 mm as in the app (divide by 25.4 for inches)."
 )
 ADAPTATIONS = (
@@ -156,9 +159,16 @@ def axis_var(nc, name, values, encoding, long_name, dtype='i4'):
 def build(args):
     places = pd.read_csv(args.places)
     defaults = pd.read_csv(args.defaults) if Path(args.defaults).exists() else None
-    app_env = dict(l.split('=', 1) for l in (REPO / 'config/app.env').read_text().splitlines()
-                   if '=' in l and not l.startswith('#'))
-    commit = app_env['APP_COMMIT']
+    model = dict(l.split('=', 1) for l in Path(args.model_file).read_text().splitlines()
+                 if '=' in l and not l.lstrip().startswith('#'))
+    commit = model['APP_COMMIT']
+    info = appinfo.app_info(args.app_dir)
+    if info['commit'] != commit:
+        raise SystemExit(f"app checkout is at {info['commit']}, model file says {commit}")
+    g = info['get_idf']
+    if g['distribution'].split()[0] != 'Gumbel' or not g['drops_first_am'] or len(g['ci_quantiles'] or []) != 2:
+        raise SystemExit(f'app method differs from what the metadata text describes: {g}')
+    ci, (qlo, qhi), nsim = g['ci_level_percent'], g['ci_quantiles'], g['bootstrap_samples']
     L, D, V, T, E = len(places), len(DATASETS), 2, len(DURATIONS), len(PROBS)
     mag = np.full((L, D, V, T, E), FILL, np.float32)
     lo, hi, mn, mx = (np.full_like(mag, FILL) for _ in range(4))
@@ -221,8 +231,12 @@ def build(args):
     out.mkdir(parents=True, exist_ok=True)
     loc_enc = {i: p for i, p in enumerate(places.id)}
     common = dict(
-        method=METHOD.format(commit=commit), batch_adaptations=ADAPTATIONS, reproduced_app_behaviours=QUIRKS,
-        app_source=f"{app_env['APP_REPO']} branch {app_env['APP_BRANCH']} commit {commit}",
+        method=METHOD.format(commit=commit, upstream=model['UPSTREAM_REPO'].removesuffix('.git'),
+                             branch=model['UPSTREAM_BRANCH'], ci=ci, nsim=nsim),
+        batch_adaptations=ADAPTATIONS, reproduced_app_behaviours=QUIRKS,
+        app_source=(f"{model['UPSTREAM_REPO']} branch {model['UPSTREAM_BRANCH']} commit {commit} "
+                    f"(fetched from the SNAP mirror {model['APP_REPO']} tag {model['APP_REF']}); "
+                    f"model version {model['MODEL_LABEL']}: {model.get('MODEL_DESCRIPTION', '')}"),
         processing_code=f'github.com/ua-snap ng-idf_curation commit {git_rev()}',
         places_source='earthmaps.io/places/communities, region Alaska (565 places), snapshot 2026-11-17',
         nodata_locations=nodata_text(places, defaults, failed_runs(args.runs_root, places)),
@@ -242,8 +256,8 @@ def build(args):
                  'non-exceedance probability (return period = 1/(1-p) years)')
         dims = ('location', 'dataset', 'variable', 'duration', 'exceedance')
         for name, arr, ln in [('magnitude', mag, 'fitted depth (Gumbel L-moments)'),
-                              ('ci_lower', lo, 'lower bound of the 90 percent CI (5th percentile of 500 bootstrap fits)'),
-                              ('ci_upper', hi, 'upper bound of the 90 percent CI (95th percentile of 500 bootstrap fits)'),
+                              ('ci_lower', lo, f'lower bound of the {ci:g} percent CI ({100 * qlo:g}th percentile of {nsim} bootstrap fits)'),
+                              ('ci_upper', hi, f'upper bound of the {ci:g} percent CI ({100 * qhi:g}th percentile of {nsim} bootstrap fits)'),
                               ('member_min', mn, 'CESM ensemble rows only: minimum of the 4 member magnitudes'),
                               ('member_max', mx, 'CESM ensemble rows only: maximum of the 4 member magnitudes')]:
             v = nc.createVariable(name, 'f4', dims, zlib=True, complevel=4, fill_value=np.float32(FILL),
@@ -283,7 +297,10 @@ def build(args):
         inp = places[[c for c in cols if c in places]].merge(defaults, on='id', how='left')
         inp.insert(0, 'location', np.arange(L))
         inp.to_csv(out / 'ngidf_places_inputs.csv', index=False)
-    (out / 'build_summary.json').write_text(json.dumps(dict(counts=counts, commit=commit), indent=2) + '\n')
+    (out / 'build_summary.json').write_text(json.dumps(dict(counts=counts, commit=commit, ci_level_percent=ci,
+                                                            ci_quantiles=[qlo, qhi], bootstrap_samples=nsim,
+                                                            model_label=model['MODEL_LABEL'],
+                                                            processing_commit=git_rev()), indent=2) + '\n')
     print(json.dumps(counts, indent=1))
 
 
@@ -293,6 +310,8 @@ def main():
     ap.add_argument('--defaults', default=str(REPO / 'data/places/place_defaults.csv'))
     ap.add_argument('--runs-root', required=True)
     ap.add_argument('--out-dir', required=True)
+    ap.add_argument('--app-dir', required=True, help='app checkout the runs used (method settings are read from it)')
+    ap.add_argument('--model-file', default=str(REPO / 'config/model_versions/a582a5c.env'))
     build(ap.parse_args())
 
 

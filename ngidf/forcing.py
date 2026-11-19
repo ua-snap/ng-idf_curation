@@ -29,7 +29,8 @@ import re
 
 import numpy as np
 
-RAW_ROOT = Path('/import/beegfs/CMIP6/arctic-cmip6/NG-IDL-Full-Forcing/whole_AK_forcing')
+RAW_ROOT = Path(os.environ.get('RAW_FORCING_ROOT',
+                               '/import/beegfs/CMIP6/arctic-cmip6/NG-IDL-Full-Forcing/whole_AK_forcing'))
 DATASETS = {
     'WRF_historical': 'WRF/historical/hsf',
     'WRF_medium': 'WRF/pgw_medium/hsf',
@@ -210,7 +211,11 @@ def cmd_assemble(args):
 
 
 def cmd_validate(args):
-    """Compare our station files against the author's NG-IDL files for shared cells."""
+    """Compare our station files against the author's NG-IDL files for shared cells.
+
+    Tolerances are the printed precision of the files: 1e-4 for T, W, RH, SW, LW and 1e-6 m for P.
+    P differences where the author's file has 0 and ours >= 0.05 m are counted separately: they are
+    the bucket-reset hours his script zeroes (PLAN.md 9.3, Q12)."""
     import pandas as pd
     ref_dir = Path(args.ref_dir)
     ours = sorted(Path(args.ours_dir).glob('data_*'))
@@ -226,11 +231,26 @@ def cmd_validate(args):
             d = (m[c] - m[c + '_ref']).abs()
             r[f'{c}_max'] = float(d.max())
             r[f'{c}_n_gt_1e-4'] = int((d > 1.01e-4).sum()) if c != 'P' else int((d > 1.01e-6).sum())
+        r['P_known_bucket_reset'] = int(((m.P_ref == 0) & (m.P >= 0.05)).sum())
         rows.append(r)
     df = pd.DataFrame(rows)
     pd.set_option('display.width', 250)
     print(df.to_string())
     print(df.drop(columns='cell').agg(['max']).to_string())
+    if args.json:
+        expected = None
+        if args.places:
+            pl = pd.read_csv(args.places)
+            expected = int(pl.dropna(subset=['forcing_cell_index']).forcing_cell_index.nunique())
+        summ = dict(cells=len(df), rows_ours_min=int(df.n_ours.min()) if len(df) else None,
+                    rows_unmatched=int((df.n_ours - df.n_shared).sum()) if len(df) else None,
+                    P_known_bucket_reset=int(df.P_known_bucket_reset.sum()) if len(df) else 0)
+        for c in cols[1:]:
+            summ[f'{c}_max'] = float(df[f'{c}_max'].max()) if len(df) else None
+            summ[f'{c}_cells_differ'] = int((df[f'{c}_n_gt_1e-4'] > 0).sum()) if len(df) else None
+        Path(args.json).write_text(json.dumps(dict(ours_dir=str(args.ours_dir), ref_dir=str(ref_dir),
+                                                   expected_cells=expected, summary=summ,
+                                                   cells=df.to_dict('records')), indent=1) + '\n')
 
 
 def main():
@@ -257,6 +277,8 @@ def main():
     v.add_argument('--ours-dir', required=True)
     v.add_argument('--ref-dir', required=True)
     v.add_argument('--max-cells', type=int, default=1000)
+    v.add_argument('--json', help='also write the comparison as JSON (pipeline report)')
+    v.add_argument('--places', help='place table, to record the expected number of station files')
     v.set_defaults(func=cmd_validate)
     args = ap.parse_args()
     args.func(args)

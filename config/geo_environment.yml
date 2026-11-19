@@ -1,0 +1,14 @@
+# Raster env for the defaults stage (scripts/defaults/cell_counts.py, cell_lai.py, build_place_defaults.py).
+# Versions pinned to those of the snap-geo env that produced the 2026-11-17 defaults; GDAL 3.7 still bundles
+# the HDF4 driver that reads GLASS LAI. Exact build: config/geo_environment.lock.txt.
+name: ngidf-geo
+channels: [conda-forge]
+dependencies:
+  - python=3.11.6
+  - gdal=3.7.0
+  - libgdal=3.7.0
+  - hdf4=4.2.15
+  - rasterio=1.3.8
+  - pyproj=3.6.1
+  - numpy=1.26.4
+  - pandas=2.2.2

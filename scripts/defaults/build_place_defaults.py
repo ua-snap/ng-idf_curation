@@ -60,20 +60,19 @@ for p in places.itertuples(index=False):
     if getattr(p, 'defaults_status', 'ok') != 'ok':
         # no Daymet land cell within 1.5 km: the app treats the point as outside its boundary
         r.update(nlcd_pixels=np.nan, nlcd_top_share=np.nan, nlcd_margin=np.nan, uses_provisional_nlcd_class=False,
+                 rebuilt_land_cover='unavailable', rebuilt_lai=np.nan, rebuilt_height_m=np.nan,
                  source_land_cover='unavailable', source_lai=np.nan, source_height_m=np.nan,
                  land_cover='unavailable', cover_code=-1, lai=np.nan, height_m=np.nan, defaults_source='none')
         rows.append(r)
         continue
     k = key(p.defaults_lat, p.defaults_lon)
-    if k in tab:
-        t = tab[k]
-        cover, l, h, src = str(t.dominant_LULC).strip().lower(), float(t.max_LAI), float(t.mean_height_m), 'author_table'
-        r.update(nlcd_pixels=np.nan, nlcd_top_share=np.nan, nlcd_margin=np.nan, uses_provisional_nlcd_class=False)
-    else:
-        src = 'rebuilt_provisional'
+    # Rebuild from NLCD / EVH / GLASS for every cell, including cells in the author's table: there it is
+    # only a check (rebuilt_* columns) and the author's values are used.
+    rb_cover, rb_l, rb_h = 'unavailable', np.nan, np.nan
+    tot, top_share, margin, prov = 0, np.nan, np.nan, 0
+    if k in nlcd_idx:
         c = nlcd_cnt[nlcd_idx[k]]
         lab_counts = {lb: 0 for lb in labels}
-        prov = 0
         for v, n in zip(nlcd_vals, c):
             v = int(v)
             if v in NLCD_TO_LABEL:
@@ -82,19 +81,24 @@ for p in places.itertuples(index=False):
                 lab_counts[PROVISIONAL_NLCD[v]] += n
                 prov += n
         tot = sum(lab_counts.values())
-        if tot == 0:
-            cover = 'unavailable'
-            top_share = margin = np.nan
-        else:
+        if tot:
             ranked = sorted(lab_counts.items(), key=lambda kv: (-kv[1], labels.index(kv[0])))
-            cover = ranked[0][0]
+            rb_cover = ranked[0][0]
             top_share = ranked[0][1] / tot
             margin = (ranked[0][1] - ranked[1][1]) / tot
         e = evh_cnt[evh_idx[k]]
         veg = np.isfinite(evh_h) & (e > 0)
-        h = float((evh_h[veg] * e[veg]).sum() / e[veg].sum()) if veg.any() else np.nan
-        l = float(lai_map.get(k, np.nan))
-        l, h = round(l, 2) if np.isfinite(l) else np.nan, round(h, 2) if np.isfinite(h) else np.nan
+        rb_h = float((evh_h[veg] * e[veg]).sum() / e[veg].sum()) if veg.any() else np.nan
+        rb_l = float(lai_map.get(k, np.nan))
+        rb_l, rb_h = round(rb_l, 2) if np.isfinite(rb_l) else np.nan, round(rb_h, 2) if np.isfinite(rb_h) else np.nan
+    r.update(rebuilt_land_cover=rb_cover, rebuilt_lai=rb_l, rebuilt_height_m=rb_h)
+    if k in tab:
+        t = tab[k]
+        cover, l, h, src = str(t.dominant_LULC).strip().lower(), float(t.max_LAI), float(t.mean_height_m), 'author_table'
+        r.update(nlcd_pixels=np.nan, nlcd_top_share=np.nan, nlcd_margin=np.nan, uses_provisional_nlcd_class=False)
+    else:
+        src = 'rebuilt_provisional'
+        cover, l, h = rb_cover, rb_l, rb_h
         r.update(nlcd_pixels=int(tot), nlcd_top_share=round(top_share, 3) if tot else np.nan,
                  nlcd_margin=round(margin, 3) if tot else np.nan,
                  uses_provisional_nlcd_class=bool(prov > 0 and cover == 'grass'))

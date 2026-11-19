@@ -1,0 +1,10 @@
+# Report env for the QA/report stage (ngidf/qa/). Kept separate from the runs env so report changes
+# never change the fingerprint of the model runs. Exact build: config/report_environment.lock.txt.
+name: ngidf-report
+channels: [conda-forge]
+dependencies:
+  - python=3.12
+  - numpy
+  - pandas
+  - netcdf4
+  - matplotlib-base
