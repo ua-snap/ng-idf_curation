@@ -21,6 +21,7 @@ on stdout (progress goes to stderr), which the flow parses.
   python -I ngidf/pipeline.py retire     --stage S                    # move a failed attempt aside
   python -I ngidf/pipeline.py adopt      --stage S --source DIR       # register outputs made before
   python -I ngidf/pipeline.py release    --name N                     # collect reports of all stages
+  python -I ngidf/pipeline.py package    [--flow-run F] [--out-dir D] # the QC package (PDF) of the current state
 """
 import argparse
 import datetime as dt
@@ -848,7 +849,7 @@ class QaStage(Stage):
             k = json.loads(cmp_f.read_text())
             c.append(check('identical to the baseline release', k['identical'] and not k['lost_values'],
                            f"{k['compared']} values; max |difference| {num(k['max_abs_diff_mm'])} mm; "
-                           f"{k['new_values']} new, {k['lost_values']} no longer present (see section 7 of the HTML report)", warn=True))
+                           f"{k['new_values']} new, {k['lost_values']} no longer present (details in the comparison with the previous release)", warn=True))
         return c, dict(fits=fit['fits']), {}, ''
 
 
@@ -1062,6 +1063,41 @@ def release(ctx, name):
     return info
 
 
+def run_info(ctx):
+    return dict(model_file=str(ctx.model_file.relative_to(REPO)), model=ctx.model, curation_commit=ctx.commit,
+                curation_dirty=ctx.dirty, curation_branch=git('rev-parse', '--abbrev-ref', 'HEAD'),
+                curation_remote=git('remote', 'get-url', 'origin'), data_root=str(ctx.data_root),
+                slurm=dict(partition=ctx.paths['SLURM_PARTITION'], qos=ctx.paths['SLURM_QOS']))
+
+
+def package(ctx, flow_run=None, out_dir=None, python=None):
+    """Build the QC package (ngidf/package/build.py) from the current state of every stage. Not a stage:
+    it documents a run, so it is rebuilt at the end of every flow run and never reused. Light work
+    (reads reports, renders a PDF), so it runs where it is called."""
+    plan = [status(ctx, s.name) | dict(title=s.title) for s in STAGE_LIST]
+    by = {p['stage']: p for p in plan}
+    qa_out = Path(by['qa']['dir']) / 'out' if by['qa']['status'] in ('pass', 'warn') else None
+    created = now()
+    fr = json.loads(Path(flow_run).read_text()) if flow_run else None
+    tag = created[:16].replace(':', '').replace('-', '').replace('T', '_')
+    out = Path(out_dir) if out_dir else ctx.data_root / 'packages' / (
+        f"{tag}_{ctx.model['MODEL_LABEL']}" + (f"_{fr['name']}" if fr and fr.get('name') else ''))
+    out.mkdir(parents=True, exist_ok=True)
+    inp = dict(info=run_info(ctx), plan=plan, created=created, flow_run=fr,
+               stages=[dict(stage=p['stage'], dir=p['dir']) for p in plan if p.get('dir')],
+               qa_out=str(qa_out) if qa_out else None,
+               compare_dir=str(qa_out / 'compare') if qa_out and (qa_out / 'compare/compare.json').exists() else None)
+    (out / 'package_input.json').write_text(json.dumps(inp, indent=1, default=str) + '\n')
+    if not python:
+        python = str(ctx.require('env_report') / 'env/bin/python')
+    r = subprocess.run([python, '-I', str(REPO / 'ngidf/package/build.py'), '--input', str(out / 'package_input.json'),
+                        '--out-dir', str(out)], capture_output=True, text=True)
+    if r.returncode:
+        raise SystemExit(f'building the QC package failed:\n{r.stderr[-3000:]}')
+    pdf = Path(r.stdout.strip().splitlines()[-1])
+    return dict(pdf=str(pdf), html=str(pdf.with_suffix('.html')), dir=str(out))
+
+
 # ---------------------------------------------------------------------------------------------- CLI
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1082,15 +1118,14 @@ def main():
             p.add_argument('--note', required=True)
     r = sub.add_parser('release')
     r.add_argument('--name', required=True)
+    k = sub.add_parser('package')
+    k.add_argument('--flow-run', help='JSON file describing the flow run (name, id, parameters, ran_now)')
+    k.add_argument('--out-dir')
+    k.add_argument('--python', help='Python with weasyprint and markdown (default: the env_report environment)')
     a = ap.parse_args()
     ctx = Context(a.model_version, a.data_root)
     if a.cmd == 'info':
-        print(json.dumps(dict(model_file=str(ctx.model_file.relative_to(REPO)), model=ctx.model,
-                              curation_commit=ctx.commit, curation_dirty=ctx.dirty,
-                              curation_branch=git('rev-parse', '--abbrev-ref', 'HEAD'),
-                              curation_remote=git('remote', 'get-url', 'origin'), data_root=str(ctx.data_root),
-                              slurm=dict(partition=ctx.paths['SLURM_PARTITION'], qos=ctx.paths['SLURM_QOS'])),
-                         indent=1))
+        print(json.dumps(run_info(ctx), indent=1))
     elif a.cmd == 'plan':
         print(json.dumps([status(ctx, s.name) | dict(title=s.title) for s in STAGE_LIST], indent=1))
     elif a.cmd == 'fingerprint':
@@ -1111,6 +1146,8 @@ def main():
         print(adopt(ctx, a.stage, a.source, a.note))
     elif a.cmd == 'release':
         print(json.dumps(release(ctx, a.name), indent=1))
+    elif a.cmd == 'package':
+        print(json.dumps(package(ctx, a.flow_run, a.out_dir, a.python), indent=1))
 
 
 if __name__ == '__main__':
