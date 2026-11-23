@@ -878,6 +878,13 @@ def status(ctx, name):
         return dict(stage=name, status='waiting', reason=str(e))
     rep = d / 'report.json'
     st = json.loads(rep.read_text())['status'] if rep.exists() else ('prepared' if (d / 'stage.json').exists() else 'todo')
+    if st == 'todo':
+        # a stage's fingerprint can be known before the stages it needs have passed (it hashes their
+        # fingerprints, not their results); it is still not ready to run
+        blocked = [n for n in STAGES[name].needs if status(ctx, n)['status'] not in ('pass', 'warn')]
+        if blocked:
+            return dict(stage=name, status='waiting', reason=f"waiting for {', '.join(blocked)}",
+                        fingerprint=ctx.fingerprint(name), dir=str(d), needs=list(STAGES[name].needs))
     res = dict(stage=name, status=st, fingerprint=ctx.fingerprint(name), dir=str(d),
                needs=list(STAGES[name].needs))
     if st == 'prepared':    # submitted by an earlier run that did not finalize; its jobs may still be running
@@ -987,7 +994,10 @@ def run_login(prep, job):
     args = [os.path.expandvars(a.replace('$OUT', env['OUT']).replace('$REPO', env['REPO'])) for a in job['args']]
     log = Path(prep['logs']) / f"{job['name']}_login.out"
     with open(log, 'w') as f:
-        r = subprocess.run(['bash', str(REPO / job['script']), prep['job_env'], *args], stdout=f, stderr=subprocess.STDOUT)
+        # config/env.sh (fingerprinted, so not edited) prints $SLURM_JOB_ID under `set -u`; a login-node step
+        # has none, so give it a placeholder
+        r = subprocess.run(['bash', str(REPO / job['script']), prep['job_env'], *args], stdout=f, stderr=subprocess.STDOUT,
+                           env=dict(os.environ, SLURM_JOB_ID=os.environ.get('SLURM_JOB_ID', 'login-node')))
     if r.returncode:
         raise SystemExit(f"{job['name']} failed; see {log}")
 
