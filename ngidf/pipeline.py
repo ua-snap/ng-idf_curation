@@ -454,17 +454,35 @@ class DefaultsStage(Stage):
                        f'{len(wl)} wetland places are shorter: {short}. DHSVM cannot compute the wind profile for a '
                        "canopy this short and stops, as the author's app does at these points, so these places get no "
                        'curves', warn=True))
-        if 'rebuilt_land_cover' in d:
-            a = d[d.defaults_source == 'author_table'].dropna(subset=['rebuilt_land_cover'])
-            if len(a):
-                agree = float((a.rebuilt_land_cover == a.source_land_cover).mean())
-                lai = (a.rebuilt_lai - a.source_lai).abs()
-                hgt = (a.rebuilt_height_m - a.source_height_m).abs()
-                metrics.update(rebuild_cover_agreement=round(agree, 3), rebuild_lai_mae=round(float(lai.mean()), 3),
-                               rebuild_height_mae_m=round(float(hgt.mean()), 3), rebuild_compared=len(a))
-                c.append(check("rebuild reproduces the author's table at his places", agree >= 0.95,
-                               f'land cover agrees at {agree:.0%} of {len(a)} places; LAI MAE {lai.mean():.2f}, '
-                               f'height MAE {hgt.mean():.2f} m (provisional until his republished table)', warn=True))
+        forced_open = d[(d.land_cover == 'open') & ~d.source_land_cover.isin(['open', 'unavailable'])]
+        moss = d[d.land_cover == 'moss']
+        metrics.update(moss_places=len(moss), run_as_open_for_missing_height=len(forced_open),
+                       wetland_below_0775=len(wl))
+        if len(moss):
+            c.append(check('moss places run with the DHSVM class the app\'s Moss card sends (6, grass)', False,
+                           f"{len(moss)} places are moss-dominated: {', '.join(moss.id)}. The author has not "
+                           'confirmed the class, LAI or height for moss', warn=True))
+        if len(forced_open):
+            c.append(check('every vegetated place has a canopy height', False,
+                           f"{len(forced_open)} places have no EVH pixels of the lifeform their cover uses, so the "
+                           f"app's rule runs them as open: {', '.join(forced_open.id)}", warn=True))
+        a = d[d.defaults_source == 'author_table']
+        if len(a):
+            agree = float((a.rebuilt_land_cover == a.source_land_cover).mean())
+            metrics.update(rebuild_cover_agreement=round(agree, 3), rebuild_compared=len(a))
+            c.append(check("rebuilt land cover matches the author's table at his places", agree >= 0.95,
+                           f'agrees at {agree:.0%} of {len(a)} places', warn=True))
+        # LAI rule checked over every cell of the author's table. Mismatches of 0.01 are rounding ties
+        # (x.xx5) that land on the other side in his arithmetic
+        t = pd.read_csv(ctx.require('app') / 'app/static/gridcell_current_lulc.csv')
+        ours = pd.read_csv(out / 'table_lai.csv')
+        diff = (ours.lai.round(2) - t.max_LAI).abs()
+        exact, close = float((diff < 0.006).mean()), float((diff < 0.0151).mean())
+        metrics.update(table_lai_exact=round(exact, 4), table_lai_within_001=round(close, 4),
+                       table_lai_max_diff=round(float(diff.max()), 2))
+        c.append(check("LAI rule reproduces the author's table (max_LAI, all cells)", exact >= 0.97 and close >= 0.999,
+                       f'equal at {exact:.1%} of {len(t):,} cells, within 0.01 at {close:.2%}; largest difference '
+                       f'{diff.max():.2f}'))
         return c, metrics, tables, ''
 
 
@@ -683,10 +701,10 @@ class RunsStage(Stage):
     def inputs(self, ctx):
         m = self.manifest_rows(ctx)
         # forcing files are named by the forcing stage's fingerprint (its directory), so the manifest
-        # text covers the forcing content
+        # text covers the forcing content. The reference stage is a gate (in `needs`), not an input:
+        # adding the author's reference outputs re-runs the reference stage, not the production runs.
         return dict(manifest=sha256_bytes(m.to_csv(index=False).encode()), app=ctx.model['APP_COMMIT'],
-                    dhsvm=ctx.fingerprint('dhsvm'), env=ctx.fingerprint('env_ngidf'),
-                    reference=ctx.fingerprint('reference'))
+                    dhsvm=ctx.fingerprint('dhsvm'), env=ctx.fingerprint('env_ngidf'))
 
     def env(self, ctx):
         return dict(NGIDF_ENV=str(ctx.require('env_ngidf') / 'env'), APP_DIR=str(ctx.require('app') / 'app'),

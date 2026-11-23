@@ -96,7 +96,7 @@ The NLCD class of every 30 m pixel whose centre falls inside a place's 1 km defa
 
 **Crosswalk** (confirmed by H. Yan, Nov 2026):
 
-<!-- dynamic: crosswalk from scripts/defaults/build_place_defaults.py NLCD_TO_LABEL and PROVISIONAL_NLCD; DHSVM codes from LULC_TO_DHSVM_CODE -->
+<!-- dynamic: crosswalk from scripts/defaults/build_place_defaults.py NLCD_TO_LABEL; DHSVM codes from LULC_TO_DHSVM_CODE -->
 
 | NLCD class(es) | NLCD name(s) | App label | DHSVM code |
 |---|---|---|---|
@@ -109,11 +109,11 @@ The NLCD class of every 30 m pixel whose centre falls inside a place's 1 km defa
 | 51, 52 | Dwarf scrub, shrub/scrub | shrub | 7 |
 | 81 | Pasture/hay | pasture | 8 |
 | 90, 95 | Woody wetlands, emergent herbaceous wetlands | wetland | 9 |
-| 73, 74 | Lichens, moss | grass (**provisional**) | 6 |
+| 73, 74 | Lichens, moss | moss | 6 (**provisional**) |
 
 ### When the author's own table is used instead
 
-If the place's defaults cell is one of the 72,406 cells of the author's table, we use his `dominant_LULC`, `max_LAI` and `mean_height_m` for that cell unchanged (`defaults_source = author_table`). This applies to 51 places. Our rebuild is still computed for these places, as a check only (`rebuilt_*` columns). All other places use the rebuild (`defaults_source = rebuilt_provisional`).
+If the place's defaults cell is one of the 72,406 cells of the author's table, we use his `dominant_LULC` and `max_LAI` for that cell unchanged, as the app fills them in (`defaults_source = author_table`). The height comes from the author's current height rule (A.4), not from his table: the table's heights were made with an earlier rule, and he will republish them. Our rebuilt land cover and LAI are still computed for these places, as a check only (`rebuilt_*` columns). All other places use the rebuild (`defaults_source = rebuilt_provisional`).
 
 ### Result in this run
 
@@ -124,7 +124,7 @@ If the place's defaults cell is one of the 72,406 cells of the author's table, w
 - **NLCD 2016, not another land-cover map.** The author named it. We also tested NALCMS 2015. It fits about as well (97.7%), but it has no pasture class, and the author's table has pasture cells. NLCD is the source.
 - **Map each pixel to a label first, then take the majority.** This matches the author's table at 97.8%. Taking the majority NLCD class first and mapping it afterwards matches at 97.1%. The author described his method as: count the 30 m pixels in the cell, group them into the app's classes, and take the dominant class (H. Yan, Nov 2026). That is the rule we use.
 - **The Daymet 1 km grid.** The author's table lies on it exactly: every cell centre is on the Daymet lattice. For point runs the author uses this 1 km table for Daymet, WRF and CESM alike, so that differences between datasets come only from the weather (H. Yan, Nov 2026). We do the same.
-- **Lichens and moss are provisional.** NLCD Alaska classes 73 and 74 never dominate a cell of the author's Interior table, so his table does not show how they are mapped. We group them with grass for now. The author has since said that 73 and 74 form a separate "Moss" class (class 10 on the app's web page; Nov 2026). At present this choice decides the land cover of no place: no place has lichen or moss pixels in a cell where grass wins. The rebuild with a separate Moss class is pending (see [section 4](#issues)).
+- **Lichens and moss form the "Moss" class.** The author confirmed that NLCD classes 73 and 74 are grouped as "Moss", class 10 on the app's web page (H. Yan, Nov 2026). Moss competes for the majority like any other class. The app's `LULC_TO_DHSVM_CODE` has no moss entry; the web page's Moss card sends DHSVM code 6 (grass), so we use 6. Its LAI and height come from the same rules as other non-forest covers (A.3, A.4). The author has not confirmed the code, LAI or height for moss, so moss places are provisional and the `defaults` stage flags them (see [section 4](#issues)). Lichen and moss pixels are rare in the cells of the author's Interior table (at most 3% of a cell).
 
 ### Where in the code
 
@@ -150,29 +150,34 @@ The author named GLASS LAI 2016 (Oct 2026) and then the exact product: MODIS V60
 
 One number per place, `max_LAI`: the overstory LAI the app puts in the DHSVM configuration. It is used only for vegetated covers; Open has LAI = 0.
 
-### How it is processed (current rule, provisional)
+### How it is processed
 
 <!-- dynamic: rule from scripts/defaults/cell_lai.py docstring -->
 
-1. For each MODIS tile, find the 1 km Daymet cell that contains each 500 m pixel centre.
-2. For each 8-day date, average the valid 500 m pixels inside the place's 1 km cell. Pixels from neighbouring tiles are pooled, so cells on tile edges are complete.
-3. Take the largest of the 46 date means as `max_LAI`.
-4. Round to 2 decimals, as in the author's table.
+The author's method (H. Yan, Nov 2026):
+
+1. Project the centre of the place's 1 km cell (its latitude and longitude) to the GLASS grid (MODIS sinusoidal projection).
+2. Take the four points 250 m east or west and 250 m north or south of the centre, in that projection, and the 500 m pixel under each point.
+3. For each 8-day composite, average the valid values of these four pixels.
+4. Average the composites within each calendar month. A composite belongs to the month of its first day.
+5. `max_LAI` is the largest of the 12 monthly means. Round to 2 decimals, as in the author's table.
+
+No-data values (255) are skipped in both averages.
+
+### Result in this run
+
+The `defaults` stage applies this rule to every cell of the author's table and compares it with his `max_LAI`; the check `LAI rule reproduces the author's table (max_LAI, all cells)` in A.2's results gives the agreement.
 
 ### Decisions and why
 
-- **Current rule and its fit.** We inferred the rule above from the author's table before knowing his method. Across his 72,406 cells it correlates well (r = 0.97) but runs about 0.10 high (median); only 7% of cells match to 2 decimals. At his 51 places in our list the mean absolute difference is 0.24.
-- **The author's method (H. Yan, Nov 2026)** is different, and explains the offset:
-  1. For each 8-day composite, average the four 500 m pixels sampled at ±250 m from the 1 km cell centre.
-  2. Average the composites within each calendar month.
-  3. `max_LAI` is the largest of the 12 monthly means.
-
-  Monthly averaging lowers the peak compared with the largest 8-day value. The rebuild with his method is pending (see [section 4](#issues)). Until then, rebuilt LAI values are provisional.
-- **Why the difference matters little.** In a sensitivity test at 3 Interior places (evergreen, shrub, deciduous; WRF historical), changing LAI by ±0.1 changed the 100-year NG depth by at most 0.4% at every duration (1 to 72 h). Precipitation curves do not depend on LAI at all.
+- **The projection of the ±250 m offsets.** The author did not say in which projection the four points are placed. Placed in the GLASS projection, the rule reproduces his `max_LAI` exactly (to 2 decimals) at 98% of his 72,406 cells and within 0.01 at 99.99%. Placed in the Daymet projection, only 9% agree, although the mean is the same: points 250 m from the centre lie close to pixel edges, so the projection decides which pixels are picked. The remaining differences of 0.01 are values that fall exactly halfway (x.xx5), which rounding sends one way or the other depending on the order of the arithmetic. A handful of larger differences (up to 0.18) lie on one MODIS tile edge.
+- **The month of a composite.** Not stated by the author. Assigning each composite to the month of its first day fits best. The month of its middle day fits almost as well. Splitting each composite between months by its days fits much worse (25% exact).
+- **An earlier rule.** Before the author described his method we used the largest 8-day mean of all 500 m pixels in the cell. That rule ran about 0.10 high.
+- **Why LAI matters little.** In a sensitivity test at 3 Interior places (evergreen, shrub, deciduous; WRF historical), changing LAI by ±0.1 changed the 100-year NG depth by at most 0.4% at every duration (1 to 72 h). Precipitation curves do not depend on LAI at all.
 
 ### Where in the code
 
-`scripts/defaults/cell_lai.py` (per-place LAI), `scripts/defaults/build_place_defaults.py`, `scripts/defaults/download_glass_lai.sh` (download), `slurm/stages/defaults.sbatch`. The rule was inferred with `scripts/defaults/infer_lai.py`; the sensitivity test is `scripts/tests/sensitivity_defaults.py`.
+`scripts/defaults/cell_lai.py` (LAI per cell, for the places and for the check over the author's table), `scripts/defaults/build_place_defaults.py`, `scripts/defaults/download_glass_lai.sh` (download), `slurm/stages/defaults.sbatch`; the check is in the `defaults` stage of `ngidf/pipeline.py`. The sensitivity test is `scripts/tests/sensitivity_defaults.py`.
 
 ---
 
@@ -194,9 +199,9 @@ The author named LANDFIRE 2016 EVH (Oct 2026) and confirmed the exact product, L
 
 One number per place, `mean_height_m`: the overstory height the app puts in the DHSVM configuration (Crop, Grass, Shrub and Pasture have a single vegetation layer, and the app uses this height for it). Open has height 0 m.
 
-### How it is processed (current rule, provisional)
+### How it is processed
 
-<!-- dynamic: decoding from scripts/defaults/build_place_defaults.py evh_height() -->
+<!-- dynamic: decoding from scripts/defaults/build_place_defaults.py evh_lifeform() and height_for() -->
 
 1. Count the EVH pixels whose centre falls in the place's 1 km cell, as for land cover (A.2).
 2. Convert each EVH code to metres:
@@ -208,25 +213,25 @@ One number per place, `mean_height_m`: the overstory height the app puts in the 
    | 301–399 | Herb | (code − 300) / 10 m; 310 ("≥ 1 m") gives 1.0 m |
    | 100 (sparse vegetation) and all non-vegetated codes | | excluded |
 
-3. `mean_height_m` is the mean height of all tree, shrub and herb pixels in the cell, whatever the cell's land cover. If the cell has no such pixel, the height is missing, and the app's rule makes the place Open (A.2, step 7).
+3. Average the heights of the pixels of the life forms the cell's land cover uses (the author's rule, H. Yan, Nov 2026):
+   - forest covers (evergreen, deciduous, mixed): the **tree** pixels;
+   - all other vegetated covers (shrub, grass, moss, crop, pasture and **wetland**): the **shrub and herb** pixels;
+   - Open: no height.
+
+   If the cell has no pixel of those life forms, the height is missing, and the app's rule makes the place Open (A.2, step 7). The `defaults` stage flags such places.
 4. Round to 2 decimals.
 5. Before the run, the height goes through the same rounding as the app's web form: metres → feet at 2 decimals → back to metres (× 0.3048).
 
 ### Decisions and why
 
 - **Decoding.** The author confirmed this decoding, including 230 → 3.0 m and 310 → 1.0 m, and the exclusion of sparse and non-vegetated codes (H. Yan, Nov 2026). The missing-height rule reproduces his table: a cell has no height exactly where it has no vegetated EVH pixel (99.6% agreement).
-- **Which pixels are averaged: not yet the author's rule.** Our values do not reproduce his table (mean absolute difference about 1.8 m over his 72,406 cells; 3.07 m at his 51 places in our list). The author explained why: his table averages tree and shrub pixels together, and he now prefers a new rule (H. Yan, Nov 2026):
-  - forest covers (evergreen, deciduous, mixed): mean height of the EVH **tree** pixels;
-  - all other vegetated covers, **including wetland**: mean height of the EVH **shrub and herb** pixels;
-  - non-vegetated covers: no height (the app then runs the place as Open).
-
-  He will republish his table with this rule. We will apply it to all places, including the 51 that now use his table. Until then, rebuilt heights are provisional.
-- **The DHSVM 0.775 m limit for wetland.** The app runs Wetland as a tree overstory over an understory. For the Alaska vegetation cluster the understory is 0.51 m tall and the trunk space is 0.5 of the overstory height. DHSVM's wind-profile code (`CalcAerodynamic.c`, error 48 "Trunk space height below 'center' of lower boundary") then needs an overstory height of at least (0.13 + 0.63) × 0.51 m / 0.5 = 0.775 m. Below that, DHSVM stops and the app returns no curve. This also happens in the author's app: 54 of the 4,509 wetland cells in his own table are below 0.775 m. In our place list, 5 rebuilt wetland places are below the limit (0.27 to 0.48 m) and have no curves. The wetland rule above (shrub and herb pixels only) will make wetland canopies shorter, so more places will be affected after the rebuild (see [section 4](#issues)).
-- **Why the difference matters little elsewhere.** In the sensitivity test (A.3), changing height by ±2 m changed the 100-year NG depth by at most 1.5% (1 to 72 h). Precipitation curves do not depend on height.
+- **Which pixels are averaged.** The author's current table averages tree and shrub heights in a way that does not depend on the land cover: its `mean_height_m` is the mean of the cell's tree-pixel mean and its shrub-pixel mean. Over his 72,406 cells this reproduces his table with a median difference of 0.06 m and no bias where a cell has both life forms; it confirms the decoding and the pixel counts above. The author now prefers the rule in step 3, because NLCD and LANDFIRE classify independently (an NLCD shrub pixel can be a LANDFIRE tree pixel), and he will republish his table with it (H. Yan, Nov 2026). We apply it to all places, including the places whose land cover and LAI come from his table. Until his republished table confirms it, the heights are provisional. The rule makes forest canopies taller and shrub and wetland canopies shorter than in his current table.
+- **The DHSVM 0.775 m limit for wetland.** The app runs Wetland as a tree overstory over an understory. For the Alaska vegetation cluster the understory is 0.51 m tall and the trunk space is 0.5 of the overstory height. DHSVM's wind-profile code (`CalcAerodynamic.c`, error 48 "Trunk space height below 'center' of lower boundary") then needs an overstory height of at least (0.13 + 0.63) × 0.51 m / 0.5 = 0.775 m. Below that, DHSVM stops and the app returns no curve. This also happens in the author's app: 54 of the 4,509 wetland cells in his own table are below 0.775 m. Because wetland heights come from shrub and herb pixels only, many wetland places are below the limit and have no curves; the `defaults` check names them (see [section 4](#issues)).
+- **Sensitivity.** In the sensitivity test (A.3), changing height by ±2 m changed the 100-year NG depth by at most 1.5% (1 to 72 h). The author's rule changes some heights by much more than that (forest canopies become several metres taller), so its effect on the curves is shown by the comparison with the previous release ([section 3.8](#change)). Precipitation curves do not depend on height.
 
 ### Where in the code
 
-`scripts/defaults/cell_counts.py`, `scripts/defaults/build_place_defaults.py` (`evh_height`), `slurm/stages/defaults.sbatch`; the 0.775 m check is in the `defaults` stage of `ngidf/pipeline.py`; the form rounding is `ui_round_trip` in `ngidf/run_point.py`. Height rules were explored with `scripts/defaults/infer_height.py` and `scripts/defaults/explore_height.py`.
+`scripts/defaults/cell_counts.py`, `scripts/defaults/build_place_defaults.py` (`evh_lifeform`, `height_for`), `slurm/stages/defaults.sbatch`; the 0.775 m check is in the `defaults` stage of `ngidf/pipeline.py`; the form rounding is `ui_round_trip` in `ngidf/run_point.py`. Height rules were explored with `scripts/defaults/infer_height.py` and `scripts/defaults/explore_height.py`.
 
 ---
 

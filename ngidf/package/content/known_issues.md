@@ -6,44 +6,43 @@ Each issue says what it is, how it affects the results, and what is open or plan
 
 **What it is.** The app runs the Wetland cover as a tree overstory over an understory. For the Alaska vegetation cluster the understory is 0.51 m tall and the trunk space is 0.5 of the overstory height. DHSVM's wind-profile code then needs an overstory at least (0.13 + 0.63) × 0.51 m / 0.5 = 0.775 m tall. Below that, DHSVM stops with error 48 ("Trunk space height below 'center' of lower boundary") and no curve is produced. The author's app behaves the same way: 54 of the 4,509 wetland cells in its own defaults table are below 0.775 m.
 
-**Impact.** The places below the limit have no curves for any dataset; they are named in the check results below. So far all of them use rebuilt (provisional) defaults. The coverage holds nodata for them, and the file metadata names them with the reason.
+**Impact.** The places below the limit have no curves for any dataset; they are named in the check results below. The coverage holds nodata for them, and the file metadata names them with the reason. Under the author's height rule, wetland heights come from shrub and herb pixels only, so many wetland places are affected, including places inside the author's own table.
 
 **Open.**
 - The fix is the author's to choose. Two workarounds were tested at a few places:
   - raising the height to 0.78 m gives results close to neighbouring taller wetland cells;
   - running the place as Open gives much higher NG: 5–55% higher at Bethel and 28–150% higher at Utqiaġvik (100-year, 24-hour NG).
 - It is also open whether the Wetland class (trees over shrubs) is meant to represent treeless tundra wetland.
-- The author's new height rule (wetland = mean height of the shrub and herb pixels) will make wetland canopies shorter. More places will fall below 0.775 m after the defaults rebuild.
+- The author's republished table will show how many of his own wetland cells fall below the limit under his height rule.
 
 **Detected by.**
 - `defaults` / `wetland canopies tall enough for DHSVM (0.775 m or more)`
 - `runs` / `runs completed`
 - `runs` / `every failure has a known cause`: this check fails if any run stops for another reason.
 
-## Provisional defaults: rebuild with the author's rules pending
+## Provisional defaults: heights and moss not yet confirmed by the author
 
-**What it is.** 510 places get land cover, LAI and canopy height from our statewide rebuild (`defaults_source = rebuilt_provisional`). The other 51 use the author's Interior table verbatim. The rebuild uses rules we inferred from his table before he described his methods. Three of them differ from what the author has since described:
+**What it is.** Land cover, LAI and canopy height follow the rules the author described (H. Yan, Nov 2026); Appendix A.2 to A.4 give them in full. Places inside the author's Interior table take his land cover and LAI; all others are rebuilt (`defaults_source = rebuilt_provisional`). Three parts are not yet confirmed against the author's own output:
 
-| Input | Current rule | The author's rule | Fit to his table now |
-|---|---|---|---|
-| LAI | Largest of the 46 8-day means of the 500 m pixels in the cell | Mean of four 500 m pixels at ±250 m from the cell centre, per composite; then calendar-month means; the largest monthly mean | r = 0.97; about 0.10 too high (median); MAE 0.24 at his 51 places |
-| Height | Mean of all tree, shrub and herb EVH pixels | Forest covers: mean of tree pixels. Other vegetated covers, including wetland: mean of shrub and herb pixels. His current table used the mean of tree and shrub pixels | MAE about 1.8 m over his table; 3.07 m at his 51 places |
-| Lichens, moss (NLCD 73, 74) | Grouped with grass | A separate "Moss" class (class 10 on the app's web page) | Not testable: they never dominate an Interior cell |
-
-The land-cover crosswalk and majority rule are the author's (confirmed by H. Yan, Nov 2026). They agree with his table at 97.8% of his 72,406 cells and at 50 of his 51 places in our list.
+| Input | Status |
+|---|---|
+| Land cover | The author's rule. Agrees with his table at 97.8% of his 72,406 cells |
+| LAI | The author's rule. Reproduces his table's `max_LAI` exactly at 98% of his cells (check below) |
+| Height | The author's new rule (forest: tree pixels; other vegetated covers: shrub and herb pixels). His current table was made with an earlier rule, so the new heights can be checked only against the table he will republish. Applied to every place, including those inside his table |
+| Moss (NLCD 73, 74) | A class of its own, as the author confirmed. Run as DHSVM code 6 (grass), the code the app's Moss card sends; the author has not confirmed the code, LAI or height for moss. Lichen and moss rarely dominate a cell near a community |
 
 **Impact.**
-- **Precipitation curves:** none. LAI and height do not enter them.
-- **NG curves:** small for LAI and height. In a test at 3 Interior places (WRF historical), LAI ±0.1 changed the 100-year NG depth by at most 0.4%, and height ±2 m by at most 1.5% (1–72 h). The author's height rule can change some heights by more than 2 m. For example, shrub cells average about 2.6 m in his table and about 0.5 m from EVH shrub pixels.
-- **Land cover:** the larger effect. 40 rebuilt places have a near-tie (the top two classes differ by less than 5% of the cell), so a small change in method could change their class.
-- **Moss:** no place's land cover is decided by lichen or moss pixels at present.
+- **Precipitation curves:** none. Land-cover parameters do not enter them.
+- **NG curves:** the new height rule changes heights by several metres in places (forest canopies taller, shrub and wetland canopies shorter), much more than the ±2 m that changed the 100-year NG depth by at most 1.5% in a sensitivity test. Its effect is shown by the comparison with the previous release ([section 3.8](#change)). Wetland places below 0.775 m get no curves (see the first issue).
+- **Land cover:** places whose top two classes differ by less than 5% of the cell (`nlcd_margin`) could change class under a small change in method.
 
-**Planned.**
-- Rebuild the defaults with the author's LAI method, his new height rule and a Moss class.
-- Apply the new rules to all places, including the 51 that use his table now. He will republish that table with the new height rule.
-- Check the rebuild against the republished table.
+**Planned.** Check the heights against the author's republished table, and the moss settings against his answer.
 
-**Detected by.** `defaults` / `rebuild reproduces the author's table at his places`. It reports land-cover agreement and the LAI and height errors at the author's places. The check warns (it never fails) if land cover agrees at less than 95%.
+**Detected by.**
+- `defaults` / `LAI rule reproduces the author's table (max_LAI, all cells)`
+- `defaults` / `rebuilt land cover matches the author's table at his places`
+- `defaults` / `moss places run with the DHSVM class the app's Moss card sends (6, grass)`: shown only when a place is moss-dominated.
+- `defaults` / `every vegetated place has a canopy height`: shown only when a vegetated place has no EVH pixel of the life forms its cover uses, so that the app runs it as Open.
 
 ## Daymet: wind cell rule
 
@@ -178,10 +177,10 @@ The land-cover crosswalk and majority rule are the author's (confirmed by H. Yan
 | Shemya Station (AK357), Eareckson Air Station (AK441) | All | About 583 km west of the WRF and Daymet grids |
 | Hazen Bay Refuge (AK472), Nunivak Island Refuge (AK479) | All | No Daymet land cell within 1.5 km, so the app has no defaults for them |
 | Bogoslof Island Refuge (AK466) | All | Its land cell lies outside NLCD coverage, so it has no land cover |
-| Kiwalik, Kongiganak, Nakeen, Newtok, Shaktoolik | All | Wetland canopy below 0.775 m (above) |
+| Wetland places named by the check `wetland canopies tall enough for DHSVM` | All | Wetland canopy below 0.775 m (above) |
 | Hyder (AK160) | WRF and CESM (Daymet available) | Just east of the WRF grid's last column (4.0 km to the edge cell) |
 
-**Impact.** 555 of 565 places have curves; Hyder has Daymet curves only.
+**Impact.** All other places have curves for every dataset; Hyder has Daymet curves only.
 
 **Detected by.** No check. The `places` stage report lists them in the `places_with_nodata` table, and the `defaults` stage counts places without defaults.
 

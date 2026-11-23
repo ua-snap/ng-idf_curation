@@ -19,9 +19,9 @@ Batch adaptations (none changes the method):
 | Adaptation | Why |
 |---|---|
 | `ngidf/run_point.py` calls the app functions directly, the same path as `app.py:get_NG_IDF`, and reproduces the web form's rounding of inputs | Batch execution |
-| Land cover, LAI and height come from the author's Interior table where it covers the place. Elsewhere they come from a statewide rebuild from the same sources (NLCD 2016, GLASS LAI 2016, LANDFIRE 2016 EVH) on the same Daymet 1 km grid | The shipped table covers Interior AK only |
+| Land cover and LAI come from the author's Interior table where it covers the place. Elsewhere they are rebuilt statewide with the author's rules from the same sources (NLCD 2016, GLASS LAI 2016 V60 500 m, LANDFIRE 2016 EVH) on the same Daymet 1 km grid. Height uses the author's current rule everywhere (forest: EVH tree pixels; other vegetated covers: shrub and herb pixels), because his table predates it. Moss (NLCD 73, 74) runs as DHSVM code 6, the code the app's Moss card sends | The shipped table covers Interior AK only |
 | WRF/CESM station files are extracted from the NNA 4 km archive with the author's conversions | The app ships forcing for one cell. **Validated against the author's own station files to text precision** |
-| Daymet station files are rebuilt with the author's recipe: Daymet v4 daily P/Tmax/Tmin, MetSim (MTCLIM, 3-hourly, uniform precipitation), daily WRF wind, Bolton RH | The author's Daymet files cover Interior AK only. **Validated against them:** wind and P exact, T to 1e-4. SW and RH are within 0.3% where elevation sources differ |
+| Daymet station files are rebuilt with the author's recipe: Daymet v4 daily P/Tmax/Tmin, MetSim (MTCLIM, 3-hourly, uniform precipitation), daily WRF wind, Bolton RH | The author's Daymet files cover Interior AK only. **Validated against them:** P exact; T exact except at 3 of 50 cells (up to 0.026 °C, cause unknown); wind exact except where the author's great-circle wind-cell rule picks another cell. SW and RH are within 0.3%, because the author gave MetSim the 1 km cell-mean elevation and we use the Daymet pixel elevation |
 | The forcing cell is chosen with the app's own nearest-cell rule, applied over the full 4 km grid | Statewide coverage |
 | Snow parameters: the single Alaska row of the app's table | It is the only Alaska parameter set |
 | `set.seed()` per run before `get_IDF.R` | Reproducible bootstrap CI |
@@ -139,10 +139,10 @@ Only the stages that read the app rerun: app, DHSVM build, reference, runs, cove
 
 ## Status
 
-The forcing extraction, model runs and coverage assembly scripts are in place. Not yet known:
+The forcing extraction, model runs and coverage assembly scripts are in place. Defaults follow the author's described rules: the LAI rule reproduces his table's `max_LAI` exactly at 98% of his 72,406 cells, and land cover agrees at 97.8%. Not yet confirmed:
 
-- the exact LAI and canopy-height products the author used;
-- the author's mapping for NLCD lichen/moss;
-- the elevation the author gave MetSim at some Interior cells. This causes a ≤ 0.3% shortwave difference.
+- canopy heights under the author's new rule, until he republishes his table (`defaults_source = rebuilt_provisional` marks rebuilt places);
+- the DHSVM class, LAI and height the author intends for moss;
+- the elevation the author gave MetSim (the 1 km cell mean of an unknown DEM). This causes a ≤ 0.3% shortwave difference.
 
-Rebuilt defaults are therefore labelled `rebuilt_provisional`. Tests show that LAI ±0.1 and height ±2 m move the 100-year NG values by at most 1.5% and leave precipitation curves unchanged.
+Tests show that LAI ±0.1 and height ±2 m move the 100-year NG values by at most 1.5% and leave precipitation curves unchanged.

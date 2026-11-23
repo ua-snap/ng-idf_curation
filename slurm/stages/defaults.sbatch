@@ -21,7 +21,12 @@ print(len(p), 'defaults cells')
 PY
 python -I "$REPO/scripts/defaults/cell_counts.py" "$NLCD_RASTER" "$cells" "$work/nlcd2016_counts.npz" & p1=$!
 python -I "$REPO/scripts/defaults/cell_counts.py" "$EVH_RASTER" "$cells" "$work/evh2016_counts.npz" & p2=$!
-python -I "$REPO/scripts/defaults/cell_lai.py" "$GLASS_DIR" "$cells" "$work/glass_lai_L2.csv" & p3=$!
-wait $p1; wait $p2; wait $p3
+python -I "$REPO/scripts/defaults/cell_lai.py" "$GLASS_DIR" "$cells" "$work/glass_lai.csv" & p3=$!
+# check: the same LAI rule over every cell of the author's table, compared with his max_LAI by the stage
+table_cells=$STAGE_DIR/table_cells.csv
+python -I -c "import sys, pandas as pd; pd.read_csv(sys.argv[1])[['latitude', 'longitude']].to_csv(sys.argv[2], index=False)" \
+    "$APP_DIR/static/gridcell_current_lulc.csv" "$table_cells"
+python -I "$REPO/scripts/defaults/cell_lai.py" "$GLASS_DIR" "$table_cells" "$OUT/table_lai.csv" & p4=$!
+wait $p1; wait $p2; wait $p3; wait $p4
 python -I "$REPO/scripts/defaults/build_place_defaults.py" "$PLACES_CSV" "$APP_DIR/static/gridcell_current_lulc.csv" \
     "$work" "$OUT/place_defaults.csv"
