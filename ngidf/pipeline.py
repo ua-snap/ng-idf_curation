@@ -44,7 +44,7 @@ SCHEMA = 1
 WRF_CESM = ['WRF_historical', 'WRF_medium', 'WRF_high'] + [
     f'CESM_{p}_LE{m}' for p in ('hist', 'futu') for m in (2, 4, 7, 9)]
 FORCING_DATASETS = WRF_CESM + ['Daymet']
-# Reference points (PLAN.md Appendix F): one per land cover, inside the author's Interior table and
+# Reference points: one per land cover, inside the author's Interior table and
 # forcing domain, so his own defaults and forcing apply directly.
 REFERENCE_PLACES = ['AK62', 'AK54', 'AK571', 'AK344', 'AK124']
 REFERENCE_DATASETS = ['Daymet', 'WRF_historical', 'CESM_hist_LE2']
@@ -444,7 +444,7 @@ class DefaultsStage(Stage):
         cover = d.groupby(['defaults_source', 'land_cover']).size().reset_index(name='places')
         metrics = dict(d.defaults_source.value_counts().to_dict())
         tables = dict(cover_by_source=cover.to_dict('records'))
-        # wetland canopies below the DHSVM aerodynamic limit (PLAN.md section 8 Q1): the app fails there too
+        # wetland canopies below the DHSVM aerodynamic limit: DHSVM stops there, in the author's app too
         wl = d[(d.land_cover == 'wetland') & (d.height_m < 0.775)]
         names = pd.read_csv(ctx.require('places') / 'places_ak.csv').set_index('id')['name']
         short = ', '.join(f"{names.get(r.id, r.id)} ({r.id}, {r.height_m:g} m)" for r in wl.itertuples())
@@ -452,7 +452,7 @@ class DefaultsStage(Stage):
                        'all wetland places are 0.775 m or taller' if wl.empty else
                        f'{len(wl)} wetland places are shorter: {short}. DHSVM cannot compute the wind profile for a '
                        "canopy this short and stops, as the author's app does at these points, so these places get no "
-                       'curves (known issue, PLAN.md 8 Q1)', warn=True))
+                       'curves', warn=True))
         if 'rebuilt_land_cover' in d:
             a = d[d.defaults_source == 'author_table'].dropna(subset=['rebuilt_land_cover'])
             if len(a):
@@ -518,8 +518,11 @@ class ForcingStage(Stage):
             m = s[f'{var}_max']
             known = s.get('P_known_bucket_reset', 0) if var == 'P' else 0
             c.append(check(f'{var} matches the author to the printed precision', m is not None and m <= t,
-                           f'max |difference| {num(m)}' + (f'; {known} hours differ only by the bucket-reset bug in the '
-                                                     "author's script (PLAN.md 9.3, Q12)" if known else ''),
+                           f'max |difference| {num(m)}' + (
+                               f'. {known} hours differ only because of how rain is computed on the hours when '
+                               "WRF empties its 100 mm rain bucket: the author's script sets such an hour to 0 when "
+                               'one rain component has 50 mm or more in it, while this pipeline uses the bucket '
+                               'counters (I_RAINC, I_RAINNC) and keeps the true amount' if known else ''),
                            warn=bool(known)))
         return c, dict(shared_cells=s['cells']), dict(validation=v['cells']), ''
 
@@ -563,13 +566,20 @@ class DaymetForcingStage(ForcingStage):
                    f"{len(files)} files, {v['expected_cells']} cells"),
              check("P matches the author's files exactly", s['P_max'] is not None and s['P_max'] <= 1.01e-6,
                    f"max |difference| {num(s['P_max'])} m"),
-             check('T matches (known residual from the tmax/tmin swap, PLAN.md 9.3)', s['T_max'] <= 0.03,
-                   f"max |difference| {num(s['T_max'])} C", warn=True),
-             check('wind matches (known: wind-cell rule, PLAN.md 9.3)', s['W_max'] <= 1.01e-4,
-                   f"max |difference| {num(s['W_max'])} m/s in {s['W_cells_differ']} of {s['cells']} cells", warn=True),
-             check('SW/LW/RH match (known: MetSim elevation source, PLAN.md 9.3)',
-                   max(s['SW_max'], s['LW_max'], s['RH_max']) <= 1.01e-4,
-                   f"max |difference| SW {num(s['SW_max'])}, LW {num(s['LW_max'])}, RH {num(s['RH_max'])}", warn=True)]
+             check("T matches the author's files (within 0.03 C)", s['T_max'] <= 0.03,
+                   f"max |difference| {num(s['T_max'])} C. Likely cause: on days when Daymet's maximum temperature "
+                   "is below its minimum, the author's script swaps the two before running MetSim; this pipeline "
+                   "does not", warn=True),
+             check("wind matches the author's files", s['W_max'] <= 1.01e-4,
+                   f"max |difference| {num(s['W_max'])} m/s in {s['W_cells_differ']} of {s['cells']} cells. "
+                   "Likely cause: the daily wind comes from the nearest WRF cell, which the author's script finds "
+                   "by great-circle distance on the full WRF grid, while this pipeline uses the app's nearest-cell "
+                   "rule in latitude/longitude degrees; the two pick different cells for some places", warn=True),
+             check("SW/LW/RH match the author's files", max(s['SW_max'], s['LW_max'], s['RH_max']) <= 1.01e-4,
+                   f"max |difference| SW {num(s['SW_max'])}, LW {num(s['LW_max'])}, RH {num(s['RH_max'])}. "
+                   "Likely cause: MetSim computes radiation and humidity from elevation; the author used the mean "
+                   "elevation of each 1 km cell from a file this pipeline does not have, and this pipeline uses "
+                   "the Daymet pixel elevation", warn=True)]
         return c, dict(shared_cells=s['cells']), dict(validation=v['cells']), ''
 
 
@@ -840,7 +850,7 @@ class QaStage(Stage):
             k = json.loads(cmp_f.read_text())
             c.append(check('identical to the baseline release', k['identical'] and not k['lost_values'],
                            f"{k['compared']} values; max |difference| {num(k['max_abs_diff_mm'])} mm; "
-                           f"{k['new_values']} new, {k['lost_values']} no longer present (review section 7)", warn=True))
+                           f"{k['new_values']} new, {k['lost_values']} no longer present (see section 7 of the HTML report)", warn=True))
         return c, dict(fits=fit['fits']), {}, ''
 
 
