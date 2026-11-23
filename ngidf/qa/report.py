@@ -265,8 +265,22 @@ def build(a):
         H.append('<p class="small">No baseline release to compare with.</p>')
 
     # 8 provenance
-    H.append('<h2 id="provenance">8. Provenance</h2><p>Every stage output lives in a directory named by a '
-             'fingerprint of its code and inputs; nothing is overwritten. Reused (adopted) outputs are marked.</p>')
+    H.append('<h2 id="provenance">8. Provenance</h2>'
+             '<p>Each stage has a <b>fingerprint</b>: a SHA-256 hash of everything the stage uses to make its '
+             'outputs. That is the exact contents of its scripts, the contents of its input files (or the '
+             'fingerprints of the earlier stages it reads from), its settings, and the fingerprint of its '
+             'software environment. Any change, even one character of a script or a new model version, gives '
+             'a new fingerprint. A stage\'s outputs live in a folder named after its fingerprint, so a stage runs '
+             'again only when something it uses has changed, and earlier results are never overwritten. '
+             'Because a stage\'s fingerprint includes those of the stages it reads from, a change re-runs '
+             'exactly the stages downstream of it.</p>'
+             '<p>Not included, because they cannot change the results: where the code was checked out, who ran it '
+             'and when, and the checks themselves. One shortcut: the 86 TB WRF/CESM archive is identified by its '
+             'path rather than by hashing its contents. It is SNAP\'s read-only archive, and its file counts '
+             'and sizes are listed under "Source data" below. "Adopted" marks outputs made before the pipeline '
+             'existed; they were checked again like any other.</p>'
+             '<p>Each stage\'s full list of fingerprinted items is under "all checks and fingerprint inputs" at '
+             'the end.</p>')
     H.append(tbl([dict(stage=r['stage'], status=r['status'], fingerprint=r['fingerprint'][:16], adopted=r['adopted'],
                        slurm_jobs=', '.join(r.get('job_ids') or []), finalized=r['finalized'], dir=r['dir'])
                   for r in reps.values()]))
