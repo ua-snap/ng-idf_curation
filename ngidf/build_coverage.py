@@ -238,7 +238,7 @@ def build(args):
                     f"(fetched from the SNAP mirror {model['APP_REPO']} tag {model['APP_REF']}); "
                     f"model version {model['MODEL_LABEL']}: {model.get('MODEL_DESCRIPTION', '')}"),
         processing_code=f'github.com/ua-snap ng-idf_curation commit {git_rev()}',
-        places_source='earthmaps.io/places/communities, region Alaska (565 places), snapshot 2026-11-17',
+        places_source='SNAP API, https://earthmaps.io/places/communities, region Alaska (565 places), snapshot 2026-11-17',
         nodata_locations=nodata_text(places, defaults, failed_runs(args.runs_root, places)),
         units='mm (depth over the duration); inches = mm / 25.4',
         creator='Scenarios Network for Alaska and Arctic Planning (SNAP), University of Alaska Fairbanks',
@@ -248,7 +248,7 @@ def build(args):
     with Dataset(out / 'ngidf_places.nc', 'w') as nc:
         for name, n in [('location', L), ('dataset', D), ('variable', V), ('duration', T), ('exceedance', E)]:
             nc.createDimension(name, n)
-        axis_var(nc, 'location', np.arange(L), loc_enc, 'earthmaps place id')
+        axis_var(nc, 'location', np.arange(L), loc_enc, 'SNAP API place id')
         axis_var(nc, 'dataset', np.arange(D), {i: k for i, (k, *_) in enumerate(DATASETS)}, 'forcing dataset and window')
         axis_var(nc, 'variable', np.arange(V), {k: v[0] for k, v in VARIABLES.items()}, 'IDF variable')
         axis_var(nc, 'duration', np.arange(T), {i: d for i, d in enumerate(DURATIONS)}, 'duration (hours)')
@@ -274,7 +274,7 @@ def build(args):
     with Dataset(out / 'ngidf_places_am.nc', 'w') as nc:
         for name, n in [('location', L), ('dataset', A), ('variable', V), ('duration', T), ('am_index', NAM)]:
             nc.createDimension(name, n)
-        axis_var(nc, 'location', np.arange(L), loc_enc, 'earthmaps place id')
+        axis_var(nc, 'location', np.arange(L), loc_enc, 'SNAP API place id')
         axis_var(nc, 'dataset', np.arange(A), {i: k for i, (k, *_) in enumerate(AM_DATASETS)}, 'forcing dataset (full period)')
         axis_var(nc, 'variable', np.arange(V), {k: v[0] for k, v in VARIABLES.items()}, 'IDF variable')
         axis_var(nc, 'duration', np.arange(T), {i: d for i, d in enumerate(DURATIONS)}, 'duration (hours)')

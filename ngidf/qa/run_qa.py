@@ -248,34 +248,41 @@ def science(cov, places, defaults, fig_dir):
     amap(chg, '100-year 24-hour NG: CESM future vs historical (ensemble means)', DIV, TwoSlopeNorm(0, -lim, lim),
          '% change', 'map_cesm_change')
 
-    # community curves (small multiples: one row per community, P | NG)
+    # community curves (small multiples: one row per community, P | NG), PER_FIGURE communities per figure so
+    # that each figure fits on one page of the PDF
     ids = [i for i in COMMUNITIES if i in cov['loc']]
-    f, axes = plt.subplots(len(ids), 2, figsize=(7.2, 2.0 * len(ids)), sharex=True)
-    for r, pid in enumerate(ids):
-        li = cov['loc'].index(pid)
-        for c, (v, vname) in enumerate([(P, 'Precipitation (P)'), (NG, 'NG (W_veg)')]):
-            ax = axes[r, c]
-            for k, (key, lab) in enumerate(CURVE_SETS):
-                y = cov['mag'][li, cov['ds'][key], v, d24]
-                if np.isfinite(y).any():
-                    ax.plot(ARI, y, color=SERIES[k], label=lab)
-                    lo, hi = cov['lo'][li, cov['ds'][key], v, d24], cov['hi'][li, cov['ds'][key], v, d24]
-                    if np.isfinite(lo).any():
-                        ax.fill_between(ARI, lo, hi, color=SERIES[k], alpha=0.12, linewidth=0)
-            ax.set_xscale('log')
-            ax.set_xticks([2, 5, 10, 25, 50, 100, 500], ['2', '5', '10', '25', '50', '100', '500'])
-            ax.set_title(f"{pid} {pl.loc[pid, 'name']}: {vname}", loc='left')
-            if c == 0:
-                ax.set_ylabel('24-h depth (mm)')
-    for ax in axes[-1]:
-        ax.set_xlabel('return period (years)')
-    h, l_ = axes[0, 0].get_legend_handles_labels()
-    f.legend(h, l_, loc='upper center', ncol=2, bbox_to_anchor=(0.5, 1.0))
-    f.tight_layout(rect=(0, 0, 1, 1 - 0.5 / len(ids) / 2.0))
-    f.savefig(fig_dir / 'community_curves.png', dpi=120)
-    plt.close(f)
-    figs['community_curves'] = ('24-hour IDF curves for the communities in the PDF report; shading = CI of single '
-                                'runs (none for ensemble means, as in the app)')
+    PER_FIGURE = 4
+    groups = [ids[k:k + PER_FIGURE] for k in range(0, len(ids), PER_FIGURE)]
+    for g, group in enumerate(groups, 1):
+        f, axes = plt.subplots(len(group), 2, figsize=(7.2, 2.0 * len(group) + 0.5), sharex=True, squeeze=False)
+        for r, pid in enumerate(group):
+            li = cov['loc'].index(pid)
+            for c, (v, vname) in enumerate([(P, 'Precipitation (P)'), (NG, 'NG (W_veg)')]):
+                ax = axes[r, c]
+                for k, (key, lab) in enumerate(CURVE_SETS):
+                    y = cov['mag'][li, cov['ds'][key], v, d24]
+                    if np.isfinite(y).any():
+                        ax.plot(ARI, y, color=SERIES[k], label=lab)
+                        lo, hi = cov['lo'][li, cov['ds'][key], v, d24], cov['hi'][li, cov['ds'][key], v, d24]
+                        if np.isfinite(lo).any():
+                            ax.fill_between(ARI, lo, hi, color=SERIES[k], alpha=0.12, linewidth=0)
+                ax.set_xscale('log')
+                ax.set_xticks([2, 5, 10, 25, 50, 100, 500], ['2', '5', '10', '25', '50', '100', '500'])
+                ax.set_title(f"{pid} {pl.loc[pid, 'name']}: {vname}", loc='left')
+                if c == 0:
+                    ax.set_ylabel('24-h depth (mm)')
+        for ax in axes[-1]:
+            ax.set_xlabel('return period (years)')
+        h, l_ = axes[0, 0].get_legend_handles_labels()
+        height = 2.0 * len(group) + 0.5
+        f.legend(h, l_, loc='upper center', ncol=2, bbox_to_anchor=(0.5, 1.0))
+        f.tight_layout(rect=(0, 0, 1, 1 - 0.5 / height))
+        name = f'community_curves_{g}'
+        f.savefig(fig_dir / f'{name}.png', dpi=120)
+        plt.close(f)
+        part = f' (part {g} of {len(groups)})' if len(groups) > 1 else ''
+        figs[name] = (f'24-hour IDF curves for the communities in the PDF report{part}; shading = CI of single '
+                      'runs (none for ensemble means, as in the app)')
     return out, figs
 
 

@@ -395,7 +395,7 @@ class PlacesStage(Stage):
         import pandas as pd
         p = pd.read_csv(out / 'places_ak.csv')
         n = len(p)
-        c = [check('all earthmaps Alaska places present', n == 565, f'{n} places'),
+        c = [check('all Alaska places from the SNAP API present', n == 565, f'{n} places'),
              check('place ids unique', p.id.is_unique)]
         st = []
         for col in ('defaults_status', 'wrf_cesm_status', 'daymet_status'):

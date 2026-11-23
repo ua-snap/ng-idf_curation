@@ -20,7 +20,7 @@ Paths below are relative to the repository root, or to the data root `{{data_roo
 
 | Item | Value |
 |---|---|
-| Name | SNAP EarthMaps communities list |
+| Name | SNAP API community list |
 | URL | `https://earthmaps.io/places/communities` |
 | Snapshot | `raw/earthmaps_places/communities_20261117.json`, downloaded 17 Nov 2026 |
 | Checksum | SHA-256 `e2808b13…3bf66`, recorded in `raw/earthmaps_places/SHA256SUMS` and re-checked by the `inputs` stage |
@@ -30,12 +30,12 @@ Paths below are relative to the repository root, or to the data root `{{data_roo
 
 ### What we use from it
 
-For each Alaska place: the EarthMaps ID (for example `AK124`), the name, latitude and longitude. All 565 Alaska entries have `type == "community"`.
+For each Alaska place: the SNAP API place ID (for example `AK124`), the name, latitude and longitude. All 565 Alaska entries have `type == "community"`.
 
 ### How it is processed
 
 1. Keep the entries with `region == "Alaska"` (565). Sort them by the number in the ID.
-2. For each place, find three model cells, each with the rule the author's app uses:
+2. For each place, find three model cells, each with the rule the author's app uses. Two supply the place's weather. The third, the **defaults cell**, supplies its land cover, LAI and canopy height: the values the app's web page fills in when the point is clicked (A.2 to A.4).
 
    | Cell | Grid | Rule (copied from the app) | Used for |
    |---|---|---|---|
@@ -58,7 +58,7 @@ For each Alaska place: the EarthMaps ID (for example `AK124`), the name, latitud
 - **Use the app's nearest-cell rules, even where they are not the geographic nearest.** The app picks the forcing cell by unscaled degrees. At Alaska latitudes a degree of longitude is much shorter than a degree of latitude, so for 53 places this is not the closest cell on the ground. All are within 3.6 km. We follow the app so that our curve for a place is the curve the app would draw for it. The great-circle nearest cell is recorded in the place table.
 - **Different rules for defaults and Daymet forcing.** The app uses km for the defaults lookup and degrees for the Daymet forcing lookup. For 107 places the two pick different 1 km cells. We follow the app.
 - **Search land cells only.** This matches what the app can return (the author's table and station files hold land cells only). Without it, 5 defaults cells and 7 Daymet cells would have been water.
-- **Keep out-of-domain places as nodata.** They stay in the coverage with nodata values, and the file metadata names them, so the place list matches EarthMaps.
+- **Keep out-of-domain places as nodata.** They stay in the coverage with nodata values, and the file metadata names them, so the place list matches the SNAP API.
 
 ### Where in the code
 
@@ -111,9 +111,18 @@ The NLCD class of every 30 m pixel whose centre falls inside a place's 1 km defa
 | 90, 95 | Woody wetlands, emergent herbaceous wetlands | wetland | 9 |
 | 73, 74 | Lichens, moss | moss | 6 (**provisional**) |
 
+### When no land cover can be given
+
+A place's land cover is **unavailable** when there is nothing to take it from. This happens in two cases:
+
+- the place has no defaults cell, because no Daymet land cell lies within 1.5 km of it (A.1). The app treats such a point as outside its boundary. These places are counted under "No defaults" in the result below;
+- the place has a defaults cell, but the cell lies outside the NLCD map, so it has no pixels to count.
+
+A place with unavailable land cover has no LAI or canopy height either. It is not run, and it has no curves for any dataset ([section 4](#issues), "Places without curves").
+
 ### When the author's own table is used instead
 
-If the place's defaults cell is one of the 72,406 cells of the author's table, we use his `dominant_LULC` and `max_LAI` for that cell unchanged, as the app fills them in (`defaults_source = author_table`). The height comes from the author's current height rule (A.4), not from his table: the table's heights were made with an earlier rule, and he will republish them. Our rebuilt land cover and LAI are still computed for these places, as a check only (`rebuilt_*` columns). All other places use the rebuild (`defaults_source = rebuilt_provisional`).
+If the place's defaults cell is one of the 72,406 cells of the author's table, we use his `dominant_LULC` and `max_LAI` for that cell unchanged, as the app fills them in (`defaults_source = author_table`). The height comes from the author's new height rule (A.4), not from his table: the table's heights were made with his earlier rule, and he will republish them. Our rebuilt land cover and LAI are still computed for these places, as a check only (`rebuilt_*` columns). All other places use the rebuild (`defaults_source = rebuilt_provisional`).
 
 ### Result in this run
 
@@ -213,7 +222,7 @@ One number per place, `mean_height_m`: the overstory height the app puts in the 
    | 301–399 | Herb | (code − 300) / 10 m; 310 ("≥ 1 m") gives 1.0 m |
    | 100 (sparse vegetation) and all non-vegetated codes | | excluded |
 
-3. Average the heights of the pixels of the life forms the cell's land cover uses (the author's rule, H. Yan, Nov 2026):
+3. Average the heights of the pixels of the life forms the cell's land cover uses. This is the author's **new rule** (H. Yan, Nov 2026); his current table was made with an **earlier rule**, described under "Decisions and why" below:
    - forest covers (evergreen, deciduous, mixed): the **tree** pixels;
    - all other vegetated covers (shrub, grass, moss, crop, pasture and **wetland**): the **shrub and herb** pixels;
    - Open: no height.
@@ -225,9 +234,10 @@ One number per place, `mean_height_m`: the overstory height the app puts in the 
 ### Decisions and why
 
 - **Decoding.** The author confirmed this decoding, including 230 → 3.0 m and 310 → 1.0 m, and the exclusion of sparse and non-vegetated codes (H. Yan, Nov 2026). The missing-height rule reproduces his table: a cell has no height exactly where it has no vegetated EVH pixel (99.6% agreement).
-- **Which pixels are averaged.** The author's current table averages tree and shrub heights in a way that does not depend on the land cover: its `mean_height_m` is the mean of the cell's tree-pixel mean and its shrub-pixel mean. Over his 72,406 cells this reproduces his table with a median difference of 0.06 m and no bias where a cell has both life forms; it confirms the decoding and the pixel counts above. The author now prefers the rule in step 3, because NLCD and LANDFIRE classify independently (an NLCD shrub pixel can be a LANDFIRE tree pixel), and he will republish his table with it (H. Yan, Nov 2026). We apply it to all places, including the places whose land cover and LAI come from his table. Until his republished table confirms it, the heights are provisional. The rule makes forest canopies taller and shrub and wetland canopies shorter than in his current table.
+- **The author's earlier rule (used for his current table).** The heights in the table the app ships ignore the land cover: each cell's `mean_height_m` is the average of two numbers, the mean height of its tree pixels and the mean height of its shrub pixels. We reproduce his table with this earlier rule to a median difference of 0.06 m, with no bias where a cell has both life forms. This confirms that we decode EVH and count pixels the same way he does. We use the earlier rule only for this check.
+- **The author's new rule (step 3, the one we use).** The author replaced the earlier rule because NLCD and LANDFIRE classify independently: an NLCD shrub pixel can be a LANDFIRE tree pixel, so the life forms averaged should follow the cell's land cover (H. Yan, Nov 2026). He will republish his table with the new rule. We apply it to all places, including those whose land cover and LAI come from his table. Until his republished table confirms it, the heights are provisional. Compared with his current table, the new rule makes forest canopies taller and shrub and wetland canopies shorter.
 - **The DHSVM 0.775 m limit for wetland.** The app runs Wetland as a tree overstory over an understory. For the Alaska vegetation cluster the understory is 0.51 m tall and the trunk space is 0.5 of the overstory height. DHSVM's wind-profile code (`CalcAerodynamic.c`, error 48 "Trunk space height below 'center' of lower boundary") then needs an overstory height of at least (0.13 + 0.63) × 0.51 m / 0.5 = 0.775 m. Below that, DHSVM stops and the app returns no curve. This also happens in the author's app: 54 of the 4,509 wetland cells in his own table are below 0.775 m. Because wetland heights come from shrub and herb pixels only, many wetland places are below the limit and have no curves; the `defaults` check names them (see [section 4](#issues)).
-- **Sensitivity.** In the sensitivity test (A.3), changing height by ±2 m changed the 100-year NG depth by at most 1.5% (1 to 72 h). The author's rule changes some heights by much more than that (forest canopies become several metres taller), so its effect on the curves is shown by the comparison with the previous release ([section 3.8](#change)). Precipitation curves do not depend on height.
+- **Sensitivity.** In the sensitivity test (A.3), changing height by ±2 m changed the 100-year NG depth by at most 1.5% (1 to 72 h). The author's new rule changes some heights by much more than that (forest canopies become several metres taller), so its effect on the curves is shown by the comparison with the previous release ([section 3.8](#change)). Precipitation curves do not depend on height.
 
 ### Where in the code
 

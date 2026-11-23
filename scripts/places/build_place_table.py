@@ -22,7 +22,7 @@ where the app's rule picks a different cell. A place is outside the WRF/CESM dom
 exceeds 4 km. Hyder (AK160) lies just east of the grid's last column, so it is outside.
 
 Usage:
-    python -I build_place_table.py --communities <earthmaps json> --wrf-file <NNA file> \
+    python -I build_place_table.py --communities <SNAP API communities json> --wrf-file <NNA file> \
         --cesm-file <NNA file> --defaults-csv <gridcell_current_lulc.csv> --out <csv>
 """
 import argparse

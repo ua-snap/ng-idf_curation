@@ -1,6 +1,6 @@
 # ng-idf_curation
 
-Precomputed **NG-IDF** (next-generation intensity–duration–frequency) and precipitation-IDF curves for the 565 Alaska places listed at [earthmaps.io](https://earthmaps.io/places/communities). They are packaged as Rasdaman coverages, so the data API can return a place's curves as numbers ready for plotly.
+Precomputed **NG-IDF** (next-generation intensity–duration–frequency) and precipitation-IDF curves for the 565 Alaska places listed by the [SNAP API](https://earthmaps.io/places/communities). They are packaged as Rasdaman coverages, so the data API can return a place's curves as numbers ready for plotly.
 
 Phase 1 (this repo, now) covers the places. Phase 2 (planned) will cover the 4 km grid wall to wall.
 
@@ -19,7 +19,7 @@ Batch adaptations (none changes the method):
 | Adaptation | Why |
 |---|---|
 | `ngidf/run_point.py` calls the app functions directly, the same path as `app.py:get_NG_IDF`, and reproduces the web form's rounding of inputs | Batch execution |
-| Land cover and LAI come from the author's Interior table where it covers the place. Elsewhere they are rebuilt statewide with the author's rules from the same sources (NLCD 2016, GLASS LAI 2016 V60 500 m, LANDFIRE 2016 EVH) on the same Daymet 1 km grid. Height uses the author's current rule everywhere (forest: EVH tree pixels; other vegetated covers: shrub and herb pixels), because his table predates it. Moss (NLCD 73, 74) runs as DHSVM code 6, the code the app's Moss card sends | The shipped table covers Interior AK only |
+| Land cover and LAI come from the author's Interior table where it covers the place. Elsewhere they are rebuilt statewide with the author's rules from the same sources (NLCD 2016, GLASS LAI 2016 V60 500 m, LANDFIRE 2016 EVH) on the same Daymet 1 km grid. Height uses the author's new rule everywhere (forest: EVH tree pixels; other vegetated covers: shrub and herb pixels), because his table was made with his earlier rule. Moss (NLCD 73, 74) runs as DHSVM code 6, the code the app's Moss card sends | The shipped table covers Interior AK only |
 | WRF/CESM station files are extracted from the NNA 4 km archive with the author's conversions | The app ships forcing for one cell. **Validated against the author's own station files to text precision** |
 | Daymet station files are rebuilt with the author's recipe: Daymet v4 daily P/Tmax/Tmin, MetSim (MTCLIM, 3-hourly, uniform precipitation), daily WRF wind, Bolton RH | The author's Daymet files cover Interior AK only. **Validated against them:** P exact; T exact except at 3 of 50 cells (up to 0.026 °C, cause unknown); wind exact except where the author's great-circle wind-cell rule picks another cell. SW and RH are within 0.3%, because the author gave MetSim the 1 km cell-mean elevation and we use the Daymet pixel elevation |
 | The forcing cell is chosen with the app's own nearest-cell rule, applied over the full 4 km grid | Statewide coverage |
@@ -42,7 +42,7 @@ Both are place-indexed. All axes are integer indices with an `encoding` attribut
 
 | Axis | Size | Labels |
 |---|---|---|
-| `location` | 565 | earthmaps place id (`AK1` …) |
+| `location` | 565 | SNAP API place id (`AK1` …) |
 | `dataset` | 24 | `Daymet_historical`; `WRF_historical/medium/high`; `CESM_{hist,futu}_LE{2,4,7,9}` (full period); the same 8 with `_nearterm`; `CESM_{hist,futu}_ensemble_mean[_nearterm]` |
 | `variable` | 2 | `P` (precipitation IDF), `W_veg` (NG-IDF) |
 | `duration` | 7 | 1, 3, 6, 12, 24, 48, 72 h (Daymet: 24/48/72 only) |

@@ -37,6 +37,7 @@ GOOD, WARN, BAD, GREY = '#0ca30c', '#fab219', '#d03b3b', '#7a7974'
 STATUS = {'pass': ('✓', 'Pass', GOOD), 'warn': ('!', 'Pass with warnings', WARN), 'fail': ('✕', 'Fail', BAD),
           'todo': ('–', 'Not run', GREY), 'waiting': ('–', 'Not run', GREY), 'prepared': ('…', 'Unfinished', GREY)}
 CHECK_STATUS = {'pass': ('✓', 'Pass', GOOD), 'warn': ('!', 'Warning', WARN), 'fail': ('✕', 'Fail', BAD)}
+SOURCE_LABELS = dict(author_table="Author's table", rebuilt_provisional='Rebuilt', none='No defaults')
 ROUTINE = ('outputs produced by this pipeline (not adopted)', 'curation code committed')
 
 # The pipeline in six steps. The flowchart, the step list of section 1 and the results of section 3
@@ -104,7 +105,10 @@ pre .add { color: #0a6b0a; } pre .del { color: #a42525; } pre .hunk { color: #7a
 table { border-collapse: collapse; width: 100%; margin: 4pt 0 10pt; font-size: 8.5pt; }
 th, td { text-align: left; padding: 3pt 5pt; border-bottom: 0.5pt solid #d9d8d3; vertical-align: top; }
 th { color: #52514e; font-weight: 500; background: #f4f3f0; }
-td.num { text-align: right; } tr { break-inside: avoid; }
+td.num, th.num { text-align: right; } tr { break-inside: avoid; }
+table.compact { width: auto; min-width: 55%; break-inside: avoid; } table.compact td, table.compact th { padding: 3pt 10pt; }
+tr.total td { font-weight: 500; border-top: 0.75pt solid #52514e; }
+.keep { break-inside: avoid; }
 table.checks { table-layout: fixed; } table.checks th:nth-child(1) { width: 17%; }
 table.checks th:nth-child(2) { width: 33%; } table.checks th:nth-child(3) { width: 50%; }
 .kv td:first-child { color: #52514e; width: 32%; }
@@ -117,7 +121,8 @@ table.checks th:nth-child(2) { width: 33%; } table.checks th:nth-child(3) { widt
 .issue { border-left: 3pt solid #fab219; background: #fffaf0; padding: 6pt 10pt; margin: 8pt 0 10pt; }
 table.issuechecks { table-layout: fixed; } table.issuechecks th:nth-child(1) { width: 15%; }
 table.issuechecks th:nth-child(2) { width: 15%; } table.issuechecks th:nth-child(3) { width: 25%; }
-figure { margin: 6pt 0 10pt; break-inside: avoid; text-align: center; } figure img { width: 88%; }
+figure { margin: 6pt 0 10pt; break-inside: avoid; text-align: center; }
+figure img { width: auto; height: auto; max-width: 88%; max-height: 21cm; }  /* never taller than a page */
 figcaption { font-size: 8.5pt; color: #52514e; margin-top: 3pt; text-align: left; }
 .cover { height: 23cm; display: flex; flex-direction: column; }
 .cover .t { font-size: 26pt; font-weight: 500; color: #0d366b; margin-top: 3cm; line-height: 1.15; }
@@ -157,27 +162,36 @@ def fmt(v):
     return esc(v)
 
 
-def tbl(rows, cols=None, labels=None, status_col='status', table=CHECK_STATUS, cls=''):
+def tbl(rows, cols=None, labels=None, status_col='status', table=CHECK_STATUS, cls='', total_row=False):
     rows = list(rows or [])
     if not rows:
         return '<p class="small">(none)</p>'
     cols = cols or list(rows[0].keys())
     labels = labels or {}
-    head = ''.join(f'<th>{esc(labels.get(c, c.replace("_", " ")))}</th>' for c in cols)
+
+    def numeric(c):
+        vals = [r.get(c) for r in rows if r.get(c) is not None and c != status_col]
+        return bool(vals) and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in vals)
+    # a column is right-aligned (header and cells) only if every value in it is a number; a column that
+    # mixes numbers and text (e.g. a list of settings) is left-aligned throughout
+    num_cols = {c for c in cols if numeric(c)}
+    head = ''.join(('<th class="num">' if c in num_cols else '<th>') + esc(labels.get(c, c.replace('_', ' '))) + '</th>'
+                   for c in cols)
     body = []
-    for r in rows:
+    for k, r in enumerate(rows):
         tds = []
         for c in cols:
             v = r.get(c)
             if c == status_col:
                 tds.append(f'<td>{badge(v, table)}</td>')
             elif c == 'bytes' and isinstance(v, (int, float)):
-                tds.append(f'<td class="num">{size(v)}</td>')
-            elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                tds.append(f'<td class="num">{size(v)}</td>' if c in num_cols else f'<td>{size(v)}</td>')
+            elif isinstance(v, (int, float)) and not isinstance(v, bool) and c in num_cols:
                 tds.append(f'<td class="num">{fmt(v)}</td>')
             else:
                 tds.append(f'<td>{fmt(v)}</td>')
-        body.append('<tr>' + ''.join(tds) + '</tr>')
+        last = total_row and k == len(rows) - 1
+        body.append(('<tr class="total">' if last else '<tr>') + ''.join(tds) + '</tr>')
     return f'<table class="{cls}"><thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table>'
 
 
@@ -215,19 +229,35 @@ def md(text, facts=None):
 
 
 def lists(text):
-    """Common markdown as Python-Markdown wants it: a blank line before a list that follows a paragraph
-    line, and nested items indented by 4 spaces rather than 2."""
+    """Common markdown as Python-Markdown wants it. Python-Markdown needs everything inside a list item
+    (nested items, tables, paragraphs) indented by exactly 4 spaces per level; common markdown indents
+    to the item's text (3 spaces under "1. ", 2 under "- "). Each indented line is assigned to the item
+    whose text it lines up with and re-indented to 4 spaces per level. Also adds the blank line
+    Python-Markdown needs before a list that follows a paragraph line."""
     item = re.compile(r'^( *)([-*]|\d+\.) ')
-    out = []
+    out, stack = [], []    # stack: text column of each open list item, outermost first
     for line in text.split('\n'):
+        if not line.strip():
+            out.append(line)
+            continue
+        indent = len(line) - len(line.lstrip(' '))
         m = item.match(line)
+        if indent == 0 and not m:
+            stack = []     # a paragraph, heading or table at the margin ends every list
+            out.append(line)
+            continue
+        while stack and indent < stack[-1]:
+            stack.pop()
         if m:
-            depth = len(m.group(1))
-            line = ' ' * (4 * ((depth + 1) // 2)) + line.lstrip(' ')
+            level = len(stack)
             prev = out[-1] if out else ''
-            if prev.strip() and not item.match(prev) and not prev.startswith(' ') and not prev.lstrip().startswith('|'):
+            # an item right after a paragraph line (at any depth) would be read as part of that paragraph
+            if prev.strip() and not item.match(prev) and not prev.lstrip().startswith('|'):
                 out.append('')
-        out.append(line)
+            stack.append(indent + len(m.group(2)) + 1)
+            out.append(' ' * (4 * level) + line.lstrip(' '))
+        else:
+            out.append(' ' * (4 * len(stack)) + line.lstrip(' '))
     return '\n'.join(out)
 
 
@@ -273,12 +303,18 @@ def result_blocks(reps):
         rows = {}
         for r in d.get('tables', {}).get('cover_by_source', []):
             rows.setdefault(r['land_cover'], {})[r['defaults_source']] = r['places']
-        srcs = sorted({r['defaults_source'] for r in d.get('tables', {}).get('cover_by_source', [])})
-        table = [dict(land_cover=lc, **{sname: v.get(sname, 0) for sname in srcs}, total=sum(v.values()))
-                 for lc, v in sorted(rows.items(), key=lambda kv: -sum(kv[1].values()))]
-        out['result:defaults'] = ('<p>Places by land cover and by where their defaults come from '
-                                  '("author_table": the author\'s own table; "rebuilt_provisional": our rebuild).</p>'
-                                  + tbl(table) + checks_tbl(d))
+        found = {r['defaults_source'] for r in d.get('tables', {}).get('cover_by_source', [])}
+        # known sources first, in reading order; any other source after them
+        srcs = [x for x in ('author_table', 'rebuilt_provisional', 'none') if x in found] + sorted(found - set(SOURCE_LABELS))
+        table = [dict(land_cover=lc, **{x: v.get(x, 0) for x in srcs}, total=sum(v.values()))
+                 for lc, v in sorted(rows.items(), key=lambda kv: (kv[0] == 'unavailable', -sum(kv[1].values())))]
+        table.append(dict(land_cover='All places', **{x: sum(r[x] for r in table) for x in srcs},
+                          total=sum(r['total'] for r in table)))
+        out['result:defaults'] = ('<div class="keep"><p>Places by land cover (the app\'s labels, from the crosswalk above) and by '
+                                  'where their land cover and LAI come from ("unavailable": see above).</p>'
+                                  + tbl(table, labels=dict(land_cover='Land cover', total='Total', **SOURCE_LABELS),
+                                        cls='compact', total_row=True)
+                                  + '</div>' + checks_tbl(d))
     fr = [(n, r) for n, r in reps.items() if n.startswith('forcing_') and n != 'forcing_Daymet']
     if fr:
         out['result:wrf'] = ('<p>Every dataset of this run, compared with the author\'s files (details in '
@@ -614,7 +650,7 @@ def change(cmp_, cmp_dir):
     if not cmp_:
         return '<p class="small">No previous release to compare with.</p>'
     H = [f"<p>{esc(cmp_['label_current'])} compared with {esc(cmp_['label_baseline'])}: {cmp_['compared']} values; "
-         f"largest absolute difference {cmp_['max_abs_diff_mm']} mm{' (identical)' if cmp_['identical'] else ''}; "
+         f"largest absolute difference {cmp_['max_abs_diff_mm']:.2f} mm{' (identical)' if cmp_['identical'] else ''}; "
          f"{cmp_['new_values']} values new, {cmp_['lost_values']} no longer present.</p>"]
     if not cmp_['identical']:
         H.append('<h3>100-year change by dataset, 24 hours</h3>' + tbl([r for r in cmp_['summary'] if r['duration'] == 24]))
