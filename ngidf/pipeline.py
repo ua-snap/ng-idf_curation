@@ -446,8 +446,13 @@ class DefaultsStage(Stage):
         tables = dict(cover_by_source=cover.to_dict('records'))
         # wetland canopies below the DHSVM aerodynamic limit (PLAN.md section 8 Q1): the app fails there too
         wl = d[(d.land_cover == 'wetland') & (d.height_m < 0.775)]
-        c.append(check('wetland heights above the DHSVM limit (0.775 m)', wl.empty,
-                       f'{len(wl)} places below: DHSVM will stop for them (known issue, PLAN.md 8 Q1)', warn=True))
+        names = pd.read_csv(ctx.require('places') / 'places_ak.csv').set_index('id')['name']
+        short = ', '.join(f"{names.get(r.id, r.id)} ({r.id}, {r.height_m:g} m)" for r in wl.itertuples())
+        c.append(check('wetland canopies tall enough for DHSVM (0.775 m or more)', wl.empty,
+                       'all wetland places are 0.775 m or taller' if wl.empty else
+                       f'{len(wl)} wetland places are shorter: {short}. DHSVM cannot compute the wind profile for a '
+                       "canopy this short and stops, as the author's app does at these points, so these places get no "
+                       'curves (known issue, PLAN.md 8 Q1)', warn=True))
         if 'rebuilt_land_cover' in d:
             a = d[d.defaults_source == 'author_table'].dropna(subset=['rebuilt_land_cover'])
             if len(a):
@@ -705,11 +710,26 @@ class RunsStage(Stage):
         unexplained = {k: v for k, v in errs.items() if 'Trunk space' not in k}
         c = [check('every run has a result', int((m.status == 'missing').sum()) == 0,
                    f"{int((m.status == 'missing').sum())} missing"),
-             check('runs completed', n_ok == n, f'{n_ok} of {n} ok', warn=not unexplained),
+             check('runs completed', n_ok == n, runs_detail(n_ok, n, errs, unexplained), warn=not unexplained),
              check('every failure has a known cause', not unexplained,
                    '; '.join(f'{len(v)}x {k}' for k, v in errs.items()) or 'no failures')]
         fails = [dict(message=k, runs=len(v), examples=', '.join(v[:5])) for k, v in errs.items()]
         return c, dict(runs=n, ok=n_ok), dict(status=counts.to_dict('records'), failures=fails), ''
+
+
+def runs_detail(n_ok, n, errs, unexplained):
+    if n_ok == n:
+        return f'all {n} ok'
+    known = sorted({x.split('/')[0] for k, v in errs.items() if k not in unexplained for x in v})
+    datasets = {x.split('/')[1] for k, v in errs.items() if k not in unexplained for x in v}
+    text = f'{n_ok} of {n} ok'
+    if known:
+        text += (f'. {n - n_ok - sum(map(len, unexplained.values()))} stopped in DHSVM at the {len(known)} wetland '
+                 f'places whose canopy is too short for it ({", ".join(known)}; see the defaults stage), '
+                 f'in all {len(datasets)} datasets. Those places have no curves')
+    if unexplained:
+        text += f'. {sum(map(len, unexplained.values()))} failed for other reasons (next check)'
+    return text
 
 
 class CoverageStage(Stage):
