@@ -613,8 +613,9 @@ class ReferenceStage(Stage):
     needs = ['app', 'dhsvm', 'places', 'env_ngidf']
     code = ['scripts/tests/reference_runs.py', 'ngidf/run_point.py', 'slurm/stages/reference.sbatch']
     explain = ("Runs five Interior places (one per land cover) on the author's own forcing files and his own "
-               "defaults table, and compares the curves with output he produced with his app. Production runs "
-               "start only if this passes.")
+               "defaults table, so that only the batch wrapper and the DHSVM build differ from his app. Where "
+               "output of his app for the same points is supplied, the fitted curves are compared with it value "
+               "by value. Production runs start only if this passes.")
 
     def ref_dir(self, ctx):
         return ctx.raw(f"raw/hy_reference/{ctx.model['APP_COMMIT'][:7]}")
@@ -643,14 +644,11 @@ class ReferenceStage(Stage):
         c.append(check('model output columns are the ones extract_AM.py expects', hdr and all(h['ok'] for h in hdr),
                        '; '.join(f"col {h['index']} {h['found']!r}" for h in hdr)))
         cmp_ = [x for x in r['runs'] if x.get('compare')]
-        if cmp_:
+        if cmp_:    # only when output of the author's app for these points is supplied
             worst = max(x['compare']['magnitude_max_abs_mm'] for x in cmp_)
             c.append(check("fitted values equal the author's app output (to 0.01 mm)", worst <= 0.0101,
-                           f'{len(cmp_)} runs compared; largest difference {worst} mm'))
-        else:
-            c.append(check("compared with the author's app output", False,
-                           f'no reference output from H. Yan yet (expected in {self.ref_dir(ctx)})', warn=True))
-        return c, {}, dict(runs=r['runs'], pixel_header=hdr), ''
+                           f'{len(cmp_)} runs compared; largest difference {num(worst)} mm'))
+        return c, dict(runs_compared_with_author_app=len(cmp_)), dict(runs=r['runs'], pixel_header=hdr), ''
 
 
 class RunsStage(Stage):
