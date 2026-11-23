@@ -1100,7 +1100,11 @@ def package(ctx, flow_run=None, out_dir=None, python=None):
                compare_dir=str(qa_out / 'compare') if qa_out and (qa_out / 'compare/compare.json').exists() else None)
     (out / 'package_input.json').write_text(json.dumps(inp, indent=1, default=str) + '\n')
     if not python:
-        python = str(ctx.require('env_report') / 'env/bin/python')
+        try:
+            python = str(ctx.require('env_report') / 'env/bin/python')
+        except NotReady:
+            raise SystemExit("the QC package needs the report environment (stage env_report), which has not passed "
+                             f"in this run; see its report in {ctx.stage_dir('env_report')}") from None
     r = subprocess.run([python, '-I', str(REPO / 'ngidf/package/build.py'), '--input', str(out / 'package_input.json'),
                         '--out-dir', str(out)], capture_output=True, text=True)
     if r.returncode:
