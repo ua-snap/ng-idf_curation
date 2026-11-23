@@ -114,8 +114,9 @@ table.checks th:nth-child(2) { width: 33%; } table.checks th:nth-child(3) { widt
 .small { font-size: 8.5pt; color: #52514e; }
 .lead { font-size: 11pt; }
 .box { border-left: 3pt solid #2a78d6; background: #f2f7fd; padding: 6pt 10pt; margin: 8pt 0 10pt; }
-.issue { border-left: 3pt solid #fab219; background: #fffaf0; padding: 6pt 10pt; margin: 8pt 0 10pt; break-inside: avoid; }
-.issue.resolved { border-left-color: #0ca30c; background: #f3faf3; }
+.issue { border-left: 3pt solid #fab219; background: #fffaf0; padding: 6pt 10pt; margin: 8pt 0 10pt; }
+table.issuechecks { table-layout: fixed; } table.issuechecks th:nth-child(1) { width: 15%; }
+table.issuechecks th:nth-child(2) { width: 15%; } table.issuechecks th:nth-child(3) { width: 25%; }
 figure { margin: 6pt 0 10pt; break-inside: avoid; text-align: center; } figure img { width: 88%; }
 figcaption { font-size: 8.5pt; color: #52514e; margin-top: 3pt; text-align: left; }
 .cover { height: 23cm; display: flex; flex-direction: column; }
@@ -210,7 +211,24 @@ def md(text, facts=None):
     text = re.sub(r'<!--.*?-->', '', text, flags=re.S)
     for k, v in (facts or {}).items():
         text = text.replace('{{' + k + '}}', str(v))
-    return markdown.markdown(text, extensions=['tables', 'attr_list'])
+    return markdown.markdown(lists(text), extensions=['tables', 'attr_list'])
+
+
+def lists(text):
+    """Common markdown as Python-Markdown wants it: a blank line before a list that follows a paragraph
+    line, and nested items indented by 4 spaces rather than 2."""
+    item = re.compile(r'^( *)([-*]|\d+\.) ')
+    out = []
+    for line in text.split('\n'):
+        m = item.match(line)
+        if m:
+            depth = len(m.group(1))
+            line = ' ' * (4 * ((depth + 1) // 2)) + line.lstrip(' ')
+            prev = out[-1] if out else ''
+            if prev.strip() and not item.match(prev) and not prev.startswith(' ') and not prev.lstrip().startswith('|'):
+                out.append('')
+        out.append(line)
+    return '\n'.join(out)
 
 
 def return_periods(expr):
@@ -237,9 +255,55 @@ def return_periods(expr):
     return parts[0] if len(parts) == 1 else ', '.join(parts[:-1]) + ', and ' + parts[-1]
 
 
+def result_blocks(reps):
+    """HTML for the 'Result in this run' parts of Appendix A ({{result:<key>}})."""
+    out = {}
+    pl = reps.get('places')
+    if pl:
+        labels = dict(places='Alaska places', forcing_cells='distinct WRF/CESM 4 km cells used',
+                      daymet_cells='distinct Daymet 1 km cells used',
+                      app_rule_differs_from_nearest="places where the app's 4 km cell rule is not the nearest cell on the ground")
+        out['result:places'] = (kv([(labels.get(k, k), fmt(v)) for k, v in pl.get('metrics', {}).items()])
+                                + '<p>Places without some inputs:</p>'
+                                + tbl(pl.get('tables', {}).get('places_with_nodata'),
+                                      ['id', 'name', 'wrf_cesm_status', 'daymet_status', 'defaults_status'],
+                                      labels=dict(wrf_cesm_status='WRF/CESM', daymet_status='Daymet', defaults_status='defaults')))
+    d = reps.get('defaults')
+    if d:
+        rows = {}
+        for r in d.get('tables', {}).get('cover_by_source', []):
+            rows.setdefault(r['land_cover'], {})[r['defaults_source']] = r['places']
+        srcs = sorted({r['defaults_source'] for r in d.get('tables', {}).get('cover_by_source', [])})
+        table = [dict(land_cover=lc, **{sname: v.get(sname, 0) for sname in srcs}, total=sum(v.values()))
+                 for lc, v in sorted(rows.items(), key=lambda kv: -sum(kv[1].values()))]
+        out['result:defaults'] = ('<p>Places by land cover and by where their defaults come from '
+                                  '("author_table": the author\'s own table; "rebuilt_provisional": our rebuild).</p>'
+                                  + tbl(table) + checks_tbl(d))
+    fr = [(n, r) for n, r in reps.items() if n.startswith('forcing_') and n != 'forcing_Daymet']
+    if fr:
+        out['result:wrf'] = ('<p>Every dataset of this run, compared with the author\'s files (details in '
+                             '<a href="#res-weather">section 3.2</a>):</p>'
+                             + tbl([dict(status=r['status'], dataset=n[8:], cells_compared=r['metrics'].get('shared_cells'),
+                                         differences=('; '.join(f"{c['name']}: {c['detail']}" for c in plain_checks(r)
+                                                                if c['status'] != 'pass' and c['name'] not in ROUTINE)
+                                                      or "none beyond the last printed digit"))
+                                    for n, r in fr], table=STATUS))
+    dm = reps.get('forcing_Daymet')
+    if dm:
+        out['result:daymet'] = checks_tbl(dm)
+    for k in ('places', 'defaults', 'wrf', 'daymet'):
+        out.setdefault(f'result:{k}', '<p class="small">This step has no result in this run.</p>')
+    return out
+
+
 def facts(reps, inp):
     """Values the prose quotes, read from this run."""
-    out = {}
+    m = inp['info']['model']
+    out = dict(upstream_repo=m.get('UPSTREAM_REPO', '').removesuffix('.git'), upstream_branch=m.get('UPSTREAM_BRANCH', ''),
+               app_commit=m.get('APP_COMMIT', ''), app_commit7=m.get('APP_COMMIT', '')[:7],
+               app_repo=m.get('APP_REPO', '').removesuffix('.git'), app_ref=m.get('APP_REF', ''),
+               model_label=m.get('MODEL_LABEL', ''), data_root=inp['info'].get('data_root', ''))
+    out.update(result_blocks(reps))
     method = {r['setting']: r['value'] for r in reps.get('app', {}).get('tables', {}).get('method', [])}
     out['return_periods'] = return_periods(str(method.get('probabilities', '')))
     durs = None
@@ -338,20 +402,14 @@ def known_issues(reps):
     out = [md(intro)]
     for part in parts:
         title, _, body = part.partition('\n')
-        m = re.search(r'^Check:\s*(\S+)\s*/\s*(.+?)\s*$', body, flags=re.M)
-        body = re.sub(r'^Check:.*$', '', body, flags=re.M)
-        status_html, resolved = '', False
-        if m:
-            stage, name = m.group(1), m.group(2)
+        rows = []
+        for stage, name in re.findall(r'`([a-z_A-Z0-9]+)` / `([^`]+)`', body):
             c = next((c for c in reps.get(stage, {}).get('checks', []) if c['name'] == name), None)
-            if c is None:
-                status_html = f'<p class="small">In this run: check "{esc(name)}" ({esc(stage)}) was not run.</p>'
-            else:
-                resolved = c['status'] == 'pass'
-                status_html = (f'<p class="small">In this run ({esc(stage)}): {badge(c["status"])} '
-                               f'{esc(c["detail"])}</p>')
-        out.append(f'<div class="issue{" resolved" if resolved else ""}"><h3>{esc(title.strip())}'
-                   f'{" (resolved in this run)" if resolved else ""}</h3>{md(body)}{status_html}</div>')
+            if c:
+                rows.append(dict(status=c['status'], stage=stage, check=name, detail=c['detail']))
+        status_html = ('<p class="small">The checks named above, in this run:</p>'
+                       + tbl(rows, ['status', 'stage', 'check', 'detail'], cls='issuechecks')) if rows else ''
+        out.append(f'<div class="issue"><h3>{esc(title.strip())}</h3>{md(body)}{status_html}</div>')
     return '\n'.join(out)
 
 
@@ -463,7 +521,7 @@ def build(inp, out_dir):
 
     # appendices
     H.append('<h1 id="app-inputs">Appendix A. Inputs and how they were prepared</h1>'
-             + md((CONTENT / 'appendix_inputs.md').read_text()))
+             + md((CONTENT / 'appendix_inputs.md').read_text(), facts(reps, inp)))
     H.append('<h1 id="app-method">Appendix B. Method read from the author\'s code</h1>' + method(reps, qa))
     H.append('<h1 id="app-prov">Appendix C. Provenance</h1>' + provenance(reps, plan))
     H.append('<h1 id="app-checks">Appendix D. Every check</h1><p>Every check of every stage in this run, grouped by step.</p>')

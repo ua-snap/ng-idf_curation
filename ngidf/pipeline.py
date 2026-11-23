@@ -568,9 +568,10 @@ class DaymetForcingStage(ForcingStage):
              check("P matches the author's files exactly", s['P_max'] is not None and s['P_max'] <= 1.01e-6,
                    f"max |difference| {num(s['P_max'])} m"),
              check("T matches the author's files (within 0.03 C)", s['T_max'] <= 0.03,
-                   f"max |difference| {num(s['T_max'])} C. Likely cause: on days when Daymet's maximum temperature "
-                   "is below its minimum, the author's script swaps the two before running MetSim; this pipeline "
-                   "does not", warn=True),
+                   f"max |difference| {num(s['T_max'])} C. Cause not identified. (The author's script swaps "
+                   "maximum and minimum temperature on days when the maximum is lower; this pipeline does not, but "
+                   "no day in the Daymet series used here has a maximum below the minimum, so that is not it)",
+                   warn=True),
              check("wind matches the author's files", s['W_max'] <= 1.01e-4,
                    f"max |difference| {num(s['W_max'])} m/s in {s['W_cells_differ']} of {s['cells']} cells. "
                    "Likely cause: the daily wind comes from the nearest WRF cell, which the author's script finds "
