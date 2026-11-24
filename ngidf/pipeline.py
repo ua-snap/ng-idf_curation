@@ -768,14 +768,45 @@ def runs_detail(n_ok, n, errs, unexplained):
     return text
 
 
+COVERAGE_FILES = ('ngidf_places.nc', 'ngidf_places_am.nc', 'ngidf_places_fit.nc')
+FIT_TOL_MM = 0.01            # stored depths are rounded to 0.01 mm
+CI_BIAS_MAX_PCT = 1.0        # k table vs stored CI: median signed error, % of the CI half-width
+CI_NOISE_MAX_PCT = 6.0       # median absolute error; the app's 500-draw bootstrap alone gives about 3-5%
+
+
+def fit_checks(f):
+    """ngidf_places_fit must give back ngidf_places: magnitudes and the ensemble range to the rounding,
+    the CI within the noise of the app's bootstrap (the k table is that CI without the noise)."""
+    if not f:
+        return [check('fit coverage reproduces the curves', False, 'no fit_check in build_summary.json')]
+    miss = f['stored_without_fit'] + f['fit_without_stored']
+    dm, de = f['magnitude_max_abs_diff_mm'], f['ensemble_range_max_abs_diff_mm']
+    ok = miss == 0 and dm is not None and dm <= FIT_TOL_MM and (de is None or de <= FIT_TOL_MM)
+    out = [check('fit coverage reproduces the curves', ok,
+                 f"{f['curves_fitted']} fits for {f['curves_stored']} stored curves ({miss} without a counterpart); "
+                 f"max |depth from xi, alpha - stored magnitude| {dm} mm, ensemble member range {de} mm "
+                 f"(limit {FIT_TOL_MM} mm)")]
+    lo, hi = f['ci_lower'], f['ci_upper']
+    ok = all(b['values'] and abs(b['median_error_pct_of_half_width']) <= CI_BIAS_MAX_PCT
+             and b['median_abs_error_pct'] <= CI_NOISE_MAX_PCT for b in (lo, hi))
+    out.append(check('fit coverage CI matches the stored CI within bootstrap noise', ok,
+                     '; '.join(f"{n}: median error {b['median_error_pct_of_half_width']}%, median |error| "
+                               f"{b['median_abs_error_pct']}%, 99th pct {b['p99_abs_error_pct']}% of the CI half-width"
+                               for n, b in (('lower', lo), ('upper', hi)))
+                     + f" (limits: bias {CI_BIAS_MAX_PCT}%, median |error| {CI_NOISE_MAX_PCT}%; n_fit {f['n_fit_values']})",
+                     warn=True))
+    return out
+
+
 class CoverageStage(Stage):
     name = 'coverage'
     title = 'Coverage files (netCDF for Rasdaman)'
     needs = ['runs', 'places', 'defaults', 'app', 'env_ngidf']
     code = ['ngidf/build_coverage.py', 'ngidf/appinfo.py', 'slurm/stages/coverage.sbatch', 'recipes/*.json']
 
-    explain = ('Collects all runs into the two place-indexed netCDF files the data API will serve, with the method, '
-               'versions and nodata places written into the file metadata.')
+    explain = ('Collects all runs into the three place-indexed netCDF files the data API will serve: the curves, the '
+               'annual maxima behind them, and the Gumbel fit behind each curve (with the formulas to rebuild the '
+               'curves from it). The method, versions and nodata places are written into the file metadata.')
 
     def inputs(self, ctx):
         meta_keys = ['MODEL_LABEL', 'MODEL_DESCRIPTION', 'UPSTREAM_REPO', 'UPSTREAM_BRANCH', 'APP_REPO', 'APP_REF',
@@ -798,7 +829,8 @@ class CoverageStage(Stage):
 
     def checks(self, ctx, out):
         s = json.loads((out / 'build_summary.json').read_text())
-        c = [check('coverage files written', all((out / f).exists() for f in ('ngidf_places.nc', 'ngidf_places_am.nc')))]
+        c = [check('coverage files written', all((out / f).exists() for f in COVERAGE_FILES))]
+        c += fit_checks(s.get('fit_check'))
         mc = out / 'metadata_check.txt'
         if mc.exists():
             # coverage.sbatch writes "== <file>", the script's output, and "exit <code>" for each file; the
@@ -1149,7 +1181,7 @@ def package(ctx, flow_run=None, out_dir=None, python=None):
         dest = out / 'rasdaman'
         dest.mkdir(exist_ok=True)
         cov = Path(by['coverage']['dir']) / 'out'
-        for f in ('ngidf_places.nc', 'ngidf_places_am.nc', 'ngidf_places_inputs.csv'):
+        for f in (*COVERAGE_FILES, 'ngidf_places_inputs.csv'):
             shutil.copy2(cov / f, dest / f)
         for f in sorted((REPO / 'recipes').glob('*.json')):
             shutil.copy2(f, dest / f.name)

@@ -5,6 +5,10 @@ Outputs (netCDF4, ready for wcst_import general_coverage):
                       bands: magnitude, ci_lower, ci_upper, member_min, member_max (mm)
   ngidf_places_am.nc  location x dataset x variable x duration x am_index
                       bands: am_depth (mm), water_year, peak_date, mechanism, used_in_fit
+  ngidf_places_fit.nc location x dataset x variable x duration
+                      bands: xi, alpha (mm), n_fit: the Gumbel fit behind each curve of ngidf_places.
+                      Its metadata gives the formulas and the k table that turn them back to the
+                      curve and its CI, so whoever serves it needs nothing else.
 
 Every axis is an integer index with an `encoding` attribute (a Python-literal dict
 from index to label), the convention the SNAP data API decodes.
@@ -83,6 +87,90 @@ QUIRKS = (
     "the DHSVM basin centre and time-zone meridian keep the template values; the forcing cell is the nearest by unscaled "
     "degrees of latitude and longitude; Daymet runs report only 24, 48 and 72 hour durations."
 )
+
+
+# ---- the fit behind each curve (ngidf_places_fit)
+# get_IDF.R: lmom::samlmu (sample L-moments) -> pelgum (Gumbel parameters) -> quagum (quantiles), and a
+# parametric bootstrap for the CI. Gumbel is a location-scale family and L-moment fits are equivariant, so a
+# bootstrap quantile is xi + alpha * (the same statistic for a standard Gumbel sample of size n): the CI is
+# xi + alpha * k(p, n), with k a fixed table. K_DRAWS bootstrap samples (the app uses 500) make it noise-free.
+EULER = 0.577215664901532861   # as in lmom's pelgum
+K_DRAWS = 1_000_000
+K_SEED = 20261124
+
+
+def gumbel_fit(x):
+    """lmom::pelgum(samlmu(x)) in float64: (xi, alpha), or None where R would give NaN."""
+    x = np.sort(np.asarray(x, np.float64))
+    n = len(x)
+    if n < 2 or not np.isfinite(x).all():
+        return None
+    b0 = x.mean()
+    b1 = np.sum(np.arange(n) / (n - 1) * x) / n
+    l2 = 2 * b1 - b0
+    if not l2 > 0:          # pelgum stops on invalid L-moments; get_IDF.R then writes NaN
+        return None
+    alpha = l2 / np.log(2)
+    return b0 - EULER * alpha, alpha
+
+
+def gumbel_depth(xi, alpha, p):
+    """quagum: depth at non-exceedance probability p (return period 1/(1-p))."""
+    return xi - alpha * np.log(-np.log(p))
+
+
+def k_table(ns, probs, qlo, qhi, draws=K_DRAWS, seed=K_SEED, chunk=100_000):
+    """{n: (k_lower, k_upper)} over probs: the app's bootstrap CI for a standard Gumbel (xi 0, alpha 1) fit
+    to n values, estimated from `draws` bootstrap samples. Seeded per n, so a table does not depend on
+    which other n are present."""
+    y = -np.log(-np.log(np.asarray(probs, np.float64)))
+    out = {}
+    for n in sorted(ns):
+        rng = np.random.default_rng([seed, n])
+        w = np.arange(n) / (n - 1)
+        q = np.empty((draws, len(y)), np.float32)
+        for s in range(0, draws, chunk):
+            g = np.sort(-np.log(-np.log(rng.random((min(chunk, draws - s), n)))), axis=1)  # quagum(runif(n))
+            b0 = g.mean(1)
+            l2 = 2 * (g * w).sum(1) / n - b0
+            a = l2 / np.log(2)
+            q[s:s + len(g)] = (b0 - EULER * a)[:, None] + a[:, None] * y[None, :]
+        out[n] = tuple(np.percentile(q, 100 * f, axis=0) for f in (qlo, qhi))
+    return out
+
+
+def fit_check(mag, lo, hi, mn, mx, xi, alpha, nfit, ktab, P, di):
+    """How well xi, alpha, n_fit and the k table reproduce the stored curves.
+    Magnitudes and the ensemble range must agree to the stored rounding (0.01 mm). The CI can only agree
+    within the noise of the app's bootstrap: errors are reported as a share of the CI half-width."""
+    fitted = np.isfinite(xi)
+    stored = mag[..., 0] != FILL
+    curve = gumbel_depth(xi[..., None], alpha[..., None], P)
+    both = fitted & stored
+    res = dict(curves_stored=int(stored.sum()), curves_fitted=int(fitted.sum()),
+               stored_without_fit=int((stored & ~fitted).sum()), fit_without_stored=int((fitted & ~stored).sum()),
+               magnitude_max_abs_diff_mm=round(float(np.abs(curve[both] - mag[both]).max()), 4) if both.any() else None)
+    diffs = []
+    for key, period, win in ENSEMBLES:
+        members = [di[f'CESM_{period}_LE{m}' + ('' if win == 'full' else '_nearterm')] for m in MEMBERS]
+        ok = (mn[:, di[key], :, :, 0] != FILL) & np.isfinite(curve[:, members][..., 0]).all(axis=1)
+        for band, f in ((mn, np.min), (mx, np.max)):
+            diffs.append(np.abs(f(curve[:, members], axis=1)[ok] - band[:, di[key]][ok]))
+    d = np.concatenate([x.ravel() for x in diffs])
+    res['ensemble_range_max_abs_diff_mm'] = round(float(d.max()), 4) if d.size else None
+    for name, band, j in (('ci_lower', lo, 0), ('ci_upper', hi, 1)):
+        rel = []
+        for n, k in ktab.items():
+            sel = (nfit == n) & both & (band[..., 0] != FILL)
+            pred = xi[sel][:, None] + alpha[sel][:, None] * k[j][None, :]
+            rel.append(((band[sel] - pred) / np.abs(curve[sel] - pred)).ravel())
+        rel = np.concatenate(rel) if rel else np.array([])
+        res[name] = dict(values=int(rel.size),
+                         median_error_pct_of_half_width=round(float(np.median(rel)) * 100, 2) if rel.size else None,
+                         median_abs_error_pct=round(float(np.median(np.abs(rel))) * 100, 2) if rel.size else None,
+                         p99_abs_error_pct=round(float(np.percentile(np.abs(rel), 99)) * 100, 2) if rel.size else None)
+    res['n_fit_values'] = sorted(int(n) for n in ktab)
+    return res
 
 
 def git_rev():
@@ -172,6 +260,9 @@ def build(args):
     L, D, V, T, E = len(places), len(DATASETS), 2, len(DURATIONS), len(PROBS)
     mag = np.full((L, D, V, T, E), FILL, np.float32)
     lo, hi, mn, mx = (np.full_like(mag, FILL) for _ in range(4))
+    xi = np.full((L, D, V, T), np.nan)          # float64 while building; float32 in the file
+    alpha = np.full((L, D, V, T), np.nan)
+    nfit = np.full((L, D, V, T), -9999, np.int16)
     NAM = 33
     A = len(AM_DATASETS)
     am_depth = np.full((L, A, V, T, NAM), FILL, np.float32)
@@ -204,6 +295,12 @@ def build(args):
                     mag[li, di[key], vi, ti] = np.where(ok[0], a[0], FILL)
                     lo[li, di[key], vi, ti] = np.where(ok[1], a[1], FILL)
                     hi[li, di[key], vi, ti] = np.where(ok[2], a[2], FILL)
+                    # the fit behind the curve, from the values get_IDF.R fitted (column 4, first row dropped)
+                    amk = f'{win}/am_{d}h_{vname}'
+                    fit = gumbel_fit(r[amk][1:, 3]) if amk in r.files else None
+                    if fit is not None:
+                        xi[li, di[key], vi, ti], alpha[li, di[key], vi, ti] = fit
+                        nfit[li, di[key], vi, ti] = len(r[amk]) - 1
                     if key in ai:
                         am = r[f'{win}/am_{d}h_{vname}']
                         n = len(am)
@@ -224,8 +321,18 @@ def build(args):
             mag[li, di[key]] = np.where(valid, mean, FILL)
             mn[li, di[key]] = np.where(valid, stack.min(axis=0), FILL)
             mx[li, di[key]] = np.where(valid, stack.max(axis=0), FILL)
+            # mean of Gumbel lines in -ln(-ln p) = Gumbel with the mean xi and alpha; no n_fit (no CI)
+            fvalid = np.isfinite(xi[li, members]).all(axis=0)
+            xi[li, di[key]] = np.where(fvalid, xi[li, members].mean(axis=0), np.nan)
+            alpha[li, di[key]] = np.where(fvalid, alpha[li, members].mean(axis=0), np.nan)
             if valid.any():
                 counts[key] = counts.get(key, 0) + 1
+
+    # the k table, and how well the fits reproduce the stored curves (read by the stage checks)
+    P = np.array(PROBS, np.float64)
+    ns = sorted({int(n) for n in np.unique(nfit) if n > 1})
+    ktab = k_table(ns, P, qlo, qhi)
+    fcheck = fit_check(mag, lo, hi, mn, mx, xi, alpha, nfit, ktab, P, di)
 
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -292,6 +399,52 @@ def build(args):
         nc.setncatts(dict(title='Annual maxima behind the NG-IDF and precipitation IDF curves for Alaska places',
                           dataset_descriptions=json.dumps({k: d for k, _, _, d in AM_DATASETS}), **common))
 
+    k_json = dict(ci_level_percent=ci, quantiles=[qlo, qhi], probabilities=PROBS,
+                  k_lower={str(n): [round(float(v), 5) for v in ktab[n][0]] for n in ns},
+                  k_upper={str(n): [round(float(v), 5) for v in ktab[n][1]] for n in ns},
+                  bootstrap_samples=K_DRAWS, seed=K_SEED, app_bootstrap_samples=nsim)
+    with Dataset(out / 'ngidf_places_fit.nc', 'w') as nc:
+        for name, n in [('location', L), ('dataset', D), ('variable', V), ('duration', T)]:
+            nc.createDimension(name, n)
+        axis_var(nc, 'location', np.arange(L), loc_enc, 'SNAP API place id')
+        axis_var(nc, 'dataset', np.arange(D), {i: k for i, (k, *_) in enumerate(DATASETS)}, 'forcing dataset and window')
+        axis_var(nc, 'variable', np.arange(V), {k: v[0] for k, v in VARIABLES.items()}, 'IDF variable')
+        axis_var(nc, 'duration', np.arange(T), {i: d for i, d in enumerate(DURATIONS)}, 'duration (hours)')
+        dims = ('location', 'dataset', 'variable', 'duration')
+        for name, arr, typ, fill, ln, units in [
+                ('xi', np.where(np.isfinite(xi), xi, FILL), 'f4', np.float32(FILL),
+                 'Gumbel location parameter xi (L-moment fit)', 'mm'),
+                ('alpha', np.where(np.isfinite(alpha), alpha, FILL), 'f4', np.float32(FILL),
+                 'Gumbel scale parameter alpha (L-moment fit)', 'mm'),
+                ('n_fit', nfit, 'i2', np.int16(-9999),
+                 'number of annual maxima in the fit; selects the k table row for the CI; nodata for ensemble rows', '1')]:
+            v = nc.createVariable(name, typ, dims, zlib=True, complevel=4, fill_value=fill, chunksizes=(min(L, 64), D, V, T))
+            v[:] = arr
+            v.long_name, v.units = ln, units
+        nc.setncatts(dict(
+            title='Gumbel fits behind the NG-IDF and precipitation IDF curves for Alaska places',
+            fit_method=('xi and alpha are the L-moment Gumbel fit (lmom samlmu and pelgum, as in get_IDF.R) to the '
+                        'annual maxima get_IDF.R fitted: the first annual maximum is dropped, as in the app. For the '
+                        'full-period rows these are the values in ngidf_places_am with used_in_fit = 1. '
+                        'n_fit is the number of annual maxima fitted.'),
+            curve_formula=('depth_mm(p) = xi - alpha * ln(-ln(p)), where p = 1 - 1/T is the non-exceedance probability '
+                           'and T the return period in years (lmom quagum, as in get_IDF.R). Valid at any p; rounded to '
+                           '0.01 mm it equals the magnitude band of ngidf_places.'),
+            ci_formula=(f'ci_lower(p) = xi + alpha * k_lower[n_fit](p) and ci_upper(p) = xi + alpha * k_upper[n_fit](p), '
+                        f'with k from ci_k_table, given at the probabilities listed there (the 51 of ngidf_places). '
+                        f'This is the {ci:g} percent CI of the app\'s parametric bootstrap without its sampling noise: '
+                        f'k comes from {K_DRAWS} bootstrap samples of a standard Gumbel (the app draws {nsim} per curve). '
+                        f'It differs from the CI bands of ngidf_places only by the noise of those {nsim} draws.'),
+            ensemble_rows=('Rows named *_ensemble_mean*: xi and alpha are the means of the 4 member rows. The curve they '
+                           'give is the app\'s ensemble mean exactly, because a mean of Gumbel curves is a Gumbel curve. '
+                           'n_fit is nodata: the app gives the ensemble no CI. The member range the app shades is, at '
+                           'each p, the minimum and maximum of the 4 member curves.'),
+            ci_k_table=json.dumps(k_json),
+            agreement_with_ngidf_places=json.dumps(fcheck),
+            dataset_descriptions=json.dumps({k: d for k, _, _, d in DATASETS}),
+            variable_descriptions=json.dumps({v[0]: v[1] for v in VARIABLES.values()}),
+            **common))
+
     if defaults is not None:
         cols = ['id', 'name', 'latitude', 'longitude', 'wrf_key', 'wrf_dist_km', 'daymet_key', 'wrf_cesm_status', 'daymet_status']
         inp = places[[c for c in cols if c in places]].merge(defaults, on='id', how='left')
@@ -300,7 +453,7 @@ def build(args):
     (out / 'build_summary.json').write_text(json.dumps(dict(counts=counts, commit=commit, ci_level_percent=ci,
                                                             ci_quantiles=[qlo, qhi], bootstrap_samples=nsim,
                                                             model_label=model['MODEL_LABEL'],
-                                                            processing_commit=git_rev()), indent=2) + '\n')
+                                                            processing_commit=git_rev(), fit_check=fcheck), indent=2) + '\n')
     print(json.dumps(counts, indent=1))
 
 

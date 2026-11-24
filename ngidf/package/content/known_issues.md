@@ -143,7 +143,7 @@ Each issue says what it is, how it affects the results, and what is open or plan
 
 ## Coverage delivered for Rasdaman, not yet ingested
 
-**What it is.** Each run delivers the coverage ready for SNAP's Rasdaman server, in a `rasdaman/` folder next to this document: the two coverage files (`ngidf_places.nc`, `ngidf_places_am.nc`), the per-place inputs table (`ngidf_places_inputs.csv`) and the two `wcst_import` recipes that load them. Loading them into the server (ingestion) is a separate step on that server; the pipeline does not do it. Before delivery, the coverage stage runs SNAP's Rasdaman metadata check (`rasdaman_metadata_check.py` from `ua-snap/rasdaman-audit`) on both files. It looks for the word "into" in the metadata, which makes Rasdaman return empty responses for encoded requests.
+**What it is.** Each run delivers the coverage ready for SNAP's Rasdaman server, in a `rasdaman/` folder next to this document: the three coverage files (`ngidf_places.nc`, `ngidf_places_am.nc`, `ngidf_places_fit.nc`), the per-place inputs table (`ngidf_places_inputs.csv`) and the three `wcst_import` recipes that load them. Loading them into the server (ingestion) is a separate step on that server; the pipeline does not do it. Before delivery, the coverage stage runs SNAP's Rasdaman metadata check (`rasdaman_metadata_check.py` from `ua-snap/rasdaman-audit`) on all three files. It looks for the word "into" in the metadata, which makes Rasdaman return empty responses for encoded requests.
 
 **Impact.** None on the values. The data API serves these curves only once the coverage is ingested.
 

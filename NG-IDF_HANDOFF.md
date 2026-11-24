@@ -42,6 +42,7 @@ We precompute **NG-IDF curves** (next-generation intensity-duration-frequency: r
 - Code: curation `prefect-flow` at `e01efb5`; prefect `ng-idf-pipeline` at `91fca4b`. Both pushed.
 - **First draft release built** (flow run `nu5-lhun-expanse`, 2026-11-23, curation commit `3fa3049`): all stages pass, with the known warnings in section 4 of its PDF. Package and Rasdaman delivery folder: `/import/beegfs/SNAP/jdpaul3/ng-idf_curation_data/packages/20261123_1555_a582a5c_nu5-lhun-expanse/`. The coverage files are not yet ingested into Rasdaman.
 - The data root, the flow's clone and `rasdaman-audit` are shared with the group (set 2026-11-24): group-writable, except `rasdaman-audit`, which is group-readable only.
+- **Third coverage `ngidf_places_fit` (2026-11-24, not yet in a flow run):** each curve stored as its Gumbel fit (ξ, α and the number of years fitted) instead of 51 points, with the formulas and CI table in its metadata, so the SNAP API can compute curves and CSV downloads itself. It ships next to the 51-point `ngidf_places`, which is unchanged. See README, Coverages.
 - All results are **provisional** until H. Yan's soil-temperature DHSVM is out and run.
 - The follow-up email to H. Yan was sent on 2026-11-24 (it includes a request for reference runs from his app at 5 points). Waiting for his reply.
 

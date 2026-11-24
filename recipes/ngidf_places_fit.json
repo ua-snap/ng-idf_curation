@@ -1,0 +1,79 @@
+{
+  "config": {
+    "service_url": "https://localhost/rasdaman/ows",
+    "tmp_directory": "/tmp/",
+    "default_null_values": [
+      "-9999"
+    ],
+    "mock": false,
+    "automated": true
+  },
+  "input": {
+    "coverage_id": "ngidf_places_fit",
+    "paths": [
+      "/opt/rasdaman-storage/coverage_data/ngidf_places_fit/ngidf_places_fit.nc"
+    ]
+  },
+  "recipe": {
+    "name": "general_coverage",
+    "options": {
+      "tiling": "ALIGNED [0:564, 0:23, 0:1, 0:6] tile size 1898400",
+      "wms_import": false,
+      "import_order": "ascending",
+      "coverage": {
+        "crs": "OGC/0/Index1D?axis-label=\"location\"@OGC/0/Index1D?axis-label=\"dataset\"@OGC/0/Index1D?axis-label=\"variable\"@OGC/0/Index1D?axis-label=\"duration\"",
+        "metadata": {
+          "type": "xml",
+          "global": "auto"
+        },
+        "slicer": {
+          "type": "netcdf",
+          "pixelIsPoint": true,
+          "bands": [
+            {
+              "name": "xi",
+              "identifier": "xi",
+              "nilValue": "-9999"
+            },
+            {
+              "name": "alpha",
+              "identifier": "alpha",
+              "nilValue": "-9999"
+            },
+            {
+              "name": "n_fit",
+              "identifier": "n_fit",
+              "nilValue": "-9999"
+            }
+          ],
+          "axes": {
+            "location": {
+              "min": "${netcdf:variable:location:min}",
+              "max": "${netcdf:variable:location:max}",
+              "gridOrder": 0,
+              "resolution": 1
+            },
+            "dataset": {
+              "min": "${netcdf:variable:dataset:min}",
+              "max": "${netcdf:variable:dataset:max}",
+              "gridOrder": 1,
+              "resolution": 1
+            },
+            "variable": {
+              "min": "${netcdf:variable:variable:min}",
+              "max": "${netcdf:variable:variable:max}",
+              "gridOrder": 2,
+              "resolution": 1
+            },
+            "duration": {
+              "min": "${netcdf:variable:duration:min}",
+              "max": "${netcdf:variable:duration:max}",
+              "gridOrder": 3,
+              "resolution": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}

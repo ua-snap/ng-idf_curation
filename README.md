@@ -36,7 +36,7 @@ App behaviours we reproduce rather than correct:
 
 ## Coverages
 
-Both are place-indexed. All axes are integer indices with an `encoding` attribute, a Python-literal dict from index to label, which `ast.literal_eval` can read (the data-API convention).
+All three are place-indexed. All axes are integer indices with an `encoding` attribute, a Python-literal dict from index to label, which `ast.literal_eval` can read (the data-API convention).
 
 ### `ngidf_places`: the curves
 
@@ -69,6 +69,20 @@ These let a plot show the empirical points.
   - `peak_date` (days since 1970-01-01)
   - `mechanism` (W_veg: 1 rain, 2 snowmelt, 3 rain-on-snow)
   - `used_in_fit` (0 for the dropped first year)
+
+### `ngidf_places_fit`: the fit behind each curve
+
+The same curves as `ngidf_places`, stored as the fit they come from: 3 numbers per curve instead of 255. The SNAP API can compute any curve, its CI and the ensemble range from them, for a plot or a CSV download.
+
+- **Axes:** `location`, `dataset` (the same 24 as `ngidf_places`), `variable`, `duration`.
+- **Bands:**
+  - `xi`, `alpha` (float32, mm): the Gumbel location and scale from the app's L-moment fit
+  - `n_fit` (int16): number of annual maxima fitted (31 full period, 15 near-term); nodata for ensemble rows
+- **Curve:** depth(p) = ξ − α·ln(−ln p), with p = 1 − 1/T for a return period of T years. Rounded to 0.01 mm, it equals `magnitude` in `ngidf_places`.
+- **CI:** ξ + α·k(p, n_fit). The k table is in the file's `ci_k_table` attribute. The app's CI comes from 500 bootstrap draws of the fitted Gumbel, which depend only on ξ, α and n, so k is that same CI computed once from a million draws. It differs from `ci_lower`/`ci_upper` in `ngidf_places` only by the noise of the app's 500 draws.
+- **Ensemble rows:** ξ and α are the means of the 4 members' values. That reproduces the app's ensemble mean exactly. The member range is the pointwise min/max of the 4 member curves.
+
+The formulas, the k table and the measured agreement with `ngidf_places` are in the file's metadata (`curve_formula`, `ci_formula`, `ensemble_rows`, `ci_k_table`, `agreement_with_ngidf_places`). A server can read them from there, so its formulas can't drift from the data. The coverage stage fails if the depths or the ensemble range differ from `ngidf_places` by more than 0.01 mm, and warns if the CI differs by more than bootstrap noise.
 
 Run inputs per place (forcing cells, land cover, LAI, height, and whether they came from the author's table) ship as `ngidf_places_inputs.csv`. Global metadata carries the method statement, the adaptations, provenance and the list of nodata places.
 
