@@ -42,7 +42,8 @@ We precompute **NG-IDF curves** (next-generation intensity-duration-frequency: r
 - Code: curation `prefect-flow` at `e01efb5`; prefect `ng-idf-pipeline` at `91fca4b`. Both pushed.
 - **First draft release built** (flow run `nu5-lhun-expanse`, 2026-11-23, curation commit `3fa3049`): all stages pass, with the known warnings in section 4 of its PDF. Package and Rasdaman delivery folder: `/import/beegfs/SNAP/jdpaul3/ng-idf_curation_data/packages/20261123_1555_a582a5c_nu5-lhun-expanse/`. The coverage files are not yet ingested into Rasdaman.
 - The data root, the flow's clone and `rasdaman-audit` are shared with the group (set 2026-11-24): group-writable, except `rasdaman-audit`, which is group-readable only.
-- **Third coverage `ngidf_places_fit` (2026-11-24, not yet in a flow run):** each curve stored as its Gumbel fit (ξ, α and the number of years fitted) instead of 51 points, with the formulas and CI table in its metadata, so the SNAP API can compute curves and CSV downloads itself. It ships next to the 51-point `ngidf_places`, which is unchanged. See README, Coverages.
+- **Third coverage `ngidf_places_fit` (added 2026-11-24; built by the next flow run):** each curve stored as its Gumbel fit (ξ, α and the number of years fitted) instead of 51 points, with the formulas and CI table in its metadata, so the SNAP API can compute curves and CSV downloads itself. It ships next to the 51-point `ngidf_places`, which is unchanged. A test build on the first-draft runs rebuilt all 178,438 curves within 0.0051 mm of the stored values. See README, Coverages.
+- **Diagram of the coverages** (dimensions, bands, the new metadata, and what Rasdaman stores, the SNAP API computes and the web page shows): https://claude.ai/artifact/CfjChJghKaQ3F4aRMgNwzG (ask Josh for access).
 - All results are **provisional** until H. Yan's soil-temperature DHSVM is out and run.
 - The follow-up email to H. Yan was sent on 2026-11-24 (it includes a request for reference runs from his app at 5 points). Waiting for his reply.
 
@@ -130,7 +131,8 @@ The flow clones or updates the curation repo, plans which stages need to run, su
 | `422 Unprocessable Entity ... 'labels' ... extra fields not permitted` | Prefect 3 client talking to the Prefect 2.14 server | Use the `prefect2` environment |
 | `No module named 'griffe.dataclasses'` | `griffe` 1.0 or later with Prefect 2.14 | Install `"griffe<1.0"` and `"pydantic<2.11"` |
 | Run stops making progress after the laptop sleeps | The flow ran on the laptop | Run it from Chinook in tmux, as above |
-| A stage's Slurm jobs finished but the flow never moved on | The flow lost its connection and kept waiting | Cancel the flow run and start a new one with the same parameters. It reuses everything finished and picks up the jobs already submitted; nothing is lost |
+| Flow run failed with "Gave up after 15 failed Slurm queue checks in a row" | Slurm's controller or the SSH connection stopped answering for about 30 minutes (15 checks, `max_queue_failures`, at the 120 s `poll_seconds`) | The jobs were not cancelled. Start a new run with the same parameters: it waits for the jobs already submitted instead of submitting new ones, and reuses everything finished |
+| A stage's Slurm jobs finished but the flow never moved on | The flow lost its connection and kept waiting (before the flow gave up on failed queue checks) | Cancel the flow run and start a new one with the same parameters. It reuses everything finished and picks up the jobs already submitted; nothing is lost |
 | `the clone has local edits` | Someone edited the flow's clone | Commit or discard the edits in `/import/beegfs/SNAP/jdpaul3/ng-idf_curation` |
 
 ## 6. The QC package (PDF)
