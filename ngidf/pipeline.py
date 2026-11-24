@@ -1159,6 +1159,10 @@ def package(ctx, flow_run=None, out_dir=None, python=None):
 
 # ---------------------------------------------------------------------------------------------- CLI
 def main():
+    # Group members share the data root: everything this driver creates, and every Slurm job it submits
+    # (sbatch passes the umask on), is group-writable and private to others. The data root's directories
+    # are setgid, so new files take its group.
+    os.umask(0o007)
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--model-version')
     ap.add_argument('--data-root')
