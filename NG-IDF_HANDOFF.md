@@ -28,21 +28,23 @@ We precompute **NG-IDF curves** (next-generation intensity-duration-frequency: r
 | Rasdaman metadata check | clone of `github.com/ua-snap/rasdaman-audit` at `/import/home/jdpaul3/rasdaman-audit` (set in `config/paths.env`) |
 | Earlier batch work by B. Torgerson | `/beegfs/SNAP/rltorgerson/Oct-NG-IDF/` (`HANDOFF_2026-11-16.md`); forcing extraction ideas reused, fitting not used |
 
-## 3. Work so far (2026-11-16 to 2026-11-23)
+## 3. Work so far (2026-11-16 to 2026-11-24)
 
 - **Phase 1 built end to end:** place table with the app's own cell rules, forcing for all 12 datasets (WRF/CESM extracted from the 86 TB archive and matching the author's files to the last printed digit; Daymet rebuilt with MetSim), defaults, ~6,700 model runs with the app's code, coverage files and Rasdaman recipes.
 - **Defaults follow H. Yan's rules** (his answers of 18 Nov 2026). LAI reproduces his table exactly at 98% of cells; land cover agrees at 97.8%; heights use his new rule and are provisional until he republishes his table.
 - **Pipeline with a Prefect flow:** every stage is fingerprinted, so unchanged stages are reused and nothing is overwritten. Each run ends with a QC package (PDF) for H. Yan and colleagues and a `rasdaman/` delivery folder.
 - **Findings raised with the author:** short wetland canopies stop DHSVM (15 of our 34 wetland places; 3,253 of the 4,509 wetland cells in his own table under his new height rule); his WRF/CESM script zeroes very wet hours on rain-bucket resets.
 - **Pilots (not in production):** running all land within 5 km of a town, and anchoring NG to an observed baseline. Both open.
+- **Curves stored as their fit (2026-11-24):** every curve is a 2-parameter Gumbel, so it is fully set by ξ, α and the number of years fitted. A third coverage, `ngidf_places_fit`, stores those, with the formulas and CI table in its metadata (section 5).
+- **Flow robustness (2026-11-24):** the flow now stops after 15 failed Slurm queue checks in a row (about 30 minutes) instead of waiting forever; a rerun picks up the running jobs.
 - Earlier batch work by B. Torgerson (2026-11-16) supplied the forcing-extraction approach; its fitting step differs from the app's and is not used.
 
 ## 4. State right now
 
-- Code: curation `prefect-flow` at `e01efb5`; prefect `ng-idf-pipeline` at `91fca4b`. Both pushed.
-- **First draft release built** (flow run `nu5-lhun-expanse`, 2026-11-23, curation commit `3fa3049`): all stages pass, with the known warnings in section 4 of its PDF. Package and Rasdaman delivery folder: `/import/beegfs/SNAP/jdpaul3/ng-idf_curation_data/packages/20261123_1555_a582a5c_nu5-lhun-expanse/`. The coverage files are not yet ingested into Rasdaman.
+- Code: curation `prefect-flow` at `b6613e8`; prefect `ng-idf-pipeline` at `a371f2c`. Both pushed.
+- **Latest release: flow run `omega-sakurai-r`** (2026-11-24, curation commit `214e001`): all stages pass, with the known warnings in section 4 of its PDF. Package and Rasdaman delivery folder (three coverages, three recipes): `/import/beegfs/SNAP/jdpaul3/ng-idf_curation_data/packages/20261124_1405_a582a5c_omega-sakurai-r/`. Not yet ingested into Rasdaman.
+- Previous release: the first draft (`nu5-lhun-expanse`, 2026-11-23, two coverages); its package is still in `packages/`.
 - The data root, the flow's clone and `rasdaman-audit` are shared with the group (set 2026-11-24): group-writable, except `rasdaman-audit`, which is group-readable only.
-- **Third coverage `ngidf_places_fit` (added 2026-11-24):** each curve stored as its Gumbel fit (ξ, α and the number of years fitted), with the formulas and CI table in its metadata. First built by flow run `omega-sakurai-r` (2026-11-24, curation `214e001`): all stages pass; package and Rasdaman folder (three coverages, three recipes) at `/import/beegfs/SNAP/jdpaul3/ng-idf_curation_data/packages/20261124_1405_a582a5c_omega-sakurai-r/`. See section 5.
 - All results are **provisional** until H. Yan's soil-temperature DHSVM is out and run.
 - The follow-up email to H. Yan was sent on 2026-11-24 (it includes a request for reference runs from his app at 5 points). Waiting for his reply.
 
@@ -250,8 +252,9 @@ A flow run uses the text only after it is committed and pushed.
 - Reference outputs from his app: once they arrive, the reference stage compares them value by value (only that stage reruns).
 
 **Ours**
-- Ingest the delivered coverage into SNAP's Rasdaman server (separate step on that server).
-- Count rain-bucket reset hours affected in our cells (optional Slurm job, about 76 GB of reads), if the email should give a number.
-- Flow robustness: give up after repeated failed Slurm-queue checks instead of waiting forever.
+- Ingest the three coverages of `omega-sakurai-r` into SNAP's Rasdaman server (separate step on that server), with the recipes in its `rasdaman/` folder.
+- SNAP API endpoint for NG-IDF: read `ngidf_places_fit`, compute depth and CI with the formulas and k table in its metadata, and serve JSON for the web page's plotly charts and a CSV download (section 5).
+- Phase 1B prep: a `land_cover` axis in the coverage builder and a per-place land-cover override in the runs, so that only the LAI and height rule waits on H. Yan.
+- Optional: count rain-bucket reset hours affected in our cells (Slurm job, about 76 GB of reads), if H. Yan asks how often it happens.
 - Merge `prefect-flow` and `ng-idf-pipeline` into `main` once the first draft is accepted.
-- Open questions: running the land around each town (zones), forest damping of snowmelt at Juneau, anchoring to an observed baseline (delta method), Phase 2 wall-to-wall design.
+- Open questions: running the land around each town (zones), forest damping of snowmelt at Juneau, anchoring to an observed baseline (delta method), Phase 2 wall-to-wall design (1 km; compute is about 18 M DHSVM runs for 2A).
