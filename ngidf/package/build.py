@@ -74,8 +74,10 @@ STEPS = [
               'serves, with the method described in the file metadata.',
          inputs=[], output='Data files for the API', stages=['coverage']),
     dict(id='qa', title='Check and report',
-         what="Every run is checked against the author's code, every fitted curve is checked, the results "
-              'are summarised in maps and curves, compared with the previous release, and documented here.',
+         what="Every run is checked against the author's code, every fitted curve is checked, and the results "
+              'are summarised in maps and curves and documented here.',
+         what_compare="Every run is checked against the author's code, every fitted curve is checked, the results "
+                      'are summarised in maps and curves, compared with the previous release, and documented here.',
          inputs=[], output='This document', stages=['qa']),
 ]
 BEHIND = ['env_ngidf', 'env_msim', 'env_geo', 'env_report', 'inputs']
@@ -462,6 +464,8 @@ def build(inp, out_dir):
     cmp_dir = Path(inp['compare_dir']) if inp.get('compare_dir') else None
     cmp_ = json.loads((cmp_dir / 'compare.json').read_text()) if cmp_dir and (cmp_dir / 'compare.json').exists() else None
     m = info['model']
+    # step descriptions: the QA step mentions the comparison only when one was made
+    steps = [dict(st, what=st['what_compare']) if cmp_ and 'what_compare' in st else st for st in STEPS]
     created = inp.get('created') or dt.datetime.now().astimezone().isoformat(timespec='minutes')
     title = f"NG-IDF quality-control package: model {m['MODEL_LABEL']}"
     fonts = Path(sys.prefix) / 'fonts'
@@ -483,8 +487,8 @@ def build(inp, out_dir):
              '<li><a href="#results">3. Results</a></li>'
              + ''.join(f'<li class="l2"><a href="#res-{st["id"]}">3.{i + 1} {esc(st["title"])}</a></li>' for i, st in enumerate(STEPS))
              + '<li class="l2"><a href="#glance">3.7 Results at a glance</a></li>'
-             '<li class="l2"><a href="#change">3.8 Change from the previous release</a></li>'
-             '<li><a href="#issues">4. Known issues</a></li><li><a href="#app-inputs">Appendix A. Inputs and how they were prepared</a></li>'
+             + ('<li class="l2"><a href="#change">3.8 Change from the previous release</a></li>' if cmp_ else '')
+             + '<li><a href="#issues">4. Known issues</a></li><li><a href="#app-inputs">Appendix A. Inputs and how they were prepared</a></li>'
              '<li><a href="#app-method">Appendix B. Method read from the author\'s code</a></li>'
              '<li><a href="#app-prov">Appendix C. Provenance</a></li><li><a href="#app-checks">Appendix D. Every check</a></li>'
              '</ul></section>')
@@ -493,7 +497,7 @@ def build(inp, out_dir):
     H.append('<h1 id="overview">1. Overview</h1>' + md((CONTENT / 'overview.md').read_text(), facts(reps, inp)))
     H.append('<h2>The pipeline</h2><p>Inputs on the left are described in <a href="#app-inputs">Appendix A</a>; '
              'each step links to its results in section 3.</p>' + flowchart())
-    for i, st in enumerate(STEPS):
+    for i, st in enumerate(steps):
         ins = ', '.join(f'<a href="#{a}">{esc(n)}</a>' for n, a in st['inputs'])
         H.append(f'<h3><span class="stepnum">{i + 1}</span>{esc(st["title"])}</h3><p>{esc(st["what"])}'
                  + (f' <span class="small">Inputs: {ins}.</span>' if ins else '') + '</p>')
@@ -508,11 +512,11 @@ def build(inp, out_dir):
         ('Label', esc(m['MODEL_LABEL'])), ('Description', esc(m.get('MODEL_DESCRIPTION'))),
         ("Author's repository", f"{esc(m.get('UPSTREAM_REPO'))}, branch {esc(m.get('UPSTREAM_BRANCH'))}"),
         ('Commit', f"<code>{esc(m.get('APP_COMMIT'))}</code>"),
-        ('Copy used by the pipeline', f"{esc(m.get('APP_REPO'))}, tag <code>{esc(m.get('APP_REF'))}</code>"),
-        ('Previous release compared with', esc(
+        ('Copy used by the pipeline', f"{esc(m.get('APP_REPO'))}, tag <code>{esc(m.get('APP_REF'))}</code>")]
+        + ([('Previous release compared with', esc(
             f"the release made with model version {m['BASELINE_MODEL']}" if m.get('BASELINE_MODEL') else
-            (f"the coverage files in {m['BASELINE_COVERAGE_DIR']} (under the data directory below)"
-             if m.get('BASELINE_COVERAGE_DIR') else 'none')))]))
+            f"the coverage files in {m['BASELINE_COVERAGE_DIR']} (under the data directory below)"))]
+           if cmp_ else [])))
     H.append('<h2>Processing code</h2>' + kv([
         ('Repository', esc(remote)), ('Branch', esc(info.get('curation_branch'))),
         ('Commit', f'<a href="{esc(remote)}/commit/{esc(commit)}"><code>{esc(commit)}</code></a>'),
@@ -545,12 +549,13 @@ def build(inp, out_dir):
              f'{badge("pass", CHECK_STATUS)} means the check passed. {badge("warn", CHECK_STATUS)} means the outputs '
              'can be used but something should be known; each warning explains itself, and the ones that need '
              f'more work are in <a href="#issues">section 4</a>. {badge("fail", CHECK_STATUS)} stops the steps after it.</p>')
-    for i, st in enumerate(STEPS):
+    for i, st in enumerate(steps):
         names = step_stages(st, reps, plan)
         H.append(f'<h2 id="res-{st["id"]}">3.{i + 1} {esc(st["title"])} {badge(worst([status.get(n, "todo") for n in names]), STATUS)}</h2>')
         H.append(results_for_step(st, names, reps, qa))
     H.append('<h2 id="glance">3.7 Results at a glance</h2>' + glance(qa, qa_out))
-    H.append('<h2 id="change">3.8 Change from the previous release</h2>' + change(cmp_, cmp_dir))
+    if cmp_:   # only when the model version names a previous release to compare with
+        H.append('<h2 id="change">3.8 Change from the previous release</h2>' + change(cmp_, cmp_dir))
 
     # 4 known issues
     H.append('<h1 id="issues">4. Known issues</h1>' + known_issues(reps))

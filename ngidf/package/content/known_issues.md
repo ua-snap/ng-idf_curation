@@ -33,7 +33,7 @@ Each issue says what it is, how it affects the results, and what is open or plan
 
 **Impact.**
 - **Precipitation curves:** none. Land-cover parameters do not enter them.
-- **NG curves:** the new height rule changes heights by several metres in places (forest canopies taller, shrub and wetland canopies shorter), much more than the ±2 m that changed the 100-year NG depth by at most 1.5% in a sensitivity test. Its effect is shown by the comparison with the previous release ([section 3.8](#change)). Wetland places below 0.775 m get no curves (see the first issue).
+- **NG curves:** the new height rule changes heights by several metres in places (forest canopies taller, shrub and wetland canopies shorter), much more than the ±2 m that changed the 100-year NG depth by at most 1.5% in a sensitivity test. Wetland places below 0.775 m get no curves (see the first issue).
 - **Land cover:** places whose top two classes differ by less than 5% of the cell (`nlcd_margin`) could change class under a small change in method.
 
 **Planned.** Check the heights against the author's republished table, and the moss settings against his answer.
@@ -139,15 +139,15 @@ Each issue says what it is, how it affects the results, and what is open or plan
 **Detected by.**
 - `app` / `method settings unchanged since <baseline model>`, together with the model-change report (CI level, output columns, configuration keys, DHSVM source files). This check appears once a baseline model is set.
 - `reference` / `model output columns are the ones extract_AM.py expects`
-- `qa` / `identical to the baseline release`
+- `qa` / `identical to the baseline release`. This check appears once a previous release is set.
 
-## Rasdaman metadata check not run
+## Coverage delivered for Rasdaman, not yet ingested
 
-**What it is.** The coverage stage runs SNAP's Rasdaman metadata check (`rasdaman_metadata_check.py` from `ua-snap/rasdaman-audit`) only when the `RASDAMAN_AUDIT` path is set. It was not set for this release.
+**What it is.** Each run delivers the coverage ready for SNAP's Rasdaman server, in a `rasdaman/` folder next to this document: the two coverage files (`ngidf_places.nc`, `ngidf_places_am.nc`), the per-place inputs table (`ngidf_places_inputs.csv`) and the two `wcst_import` recipes that load them. Loading them into the server (ingestion) is a separate step on that server; the pipeline does not do it. Before delivery, the coverage stage runs SNAP's Rasdaman metadata check (`rasdaman_metadata_check.py` from `ua-snap/rasdaman-audit`) on both files. It looks for the word "into" in the metadata, which makes Rasdaman return empty responses for encoded requests.
 
-**Impact.** None on the values. The metadata of this release's coverage files has not been checked against SNAP's Rasdaman conventions. The coverage is not ingested; only the `wcst_import` recipes are delivered.
+**Impact.** None on the values. The data API serves these curves only once the coverage is ingested.
 
-**Planned.** Set `RASDAMAN_AUDIT` and re-finalize the coverage stage.
+**Planned.** Ingest the delivered files with the recipes on SNAP's Rasdaman server.
 
 **Detected by.** `coverage` / `rasdaman metadata check`
 

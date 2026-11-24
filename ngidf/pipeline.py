@@ -100,6 +100,14 @@ def git(*args, cwd=REPO):
     return r.stdout.strip() if r.returncode == 0 else None
 
 
+def audit_commit(path):
+    """Commit of the rasdaman-audit clone, marked dirty if it has local changes; 'missing' if not a clone."""
+    c = git('rev-parse', 'HEAD', cwd=path)
+    if not c:
+        return 'missing'
+    return c + ('-dirty' if git('status', '--porcelain', '--untracked-files=no', cwd=path) else '')
+
+
 def uncommitted(files):
     """The files whose content differs from the committed version at HEAD (or that are not committed)."""
     out = []
@@ -772,15 +780,18 @@ class CoverageStage(Stage):
     def inputs(self, ctx):
         meta_keys = ['MODEL_LABEL', 'MODEL_DESCRIPTION', 'UPSTREAM_REPO', 'UPSTREAM_BRANCH', 'APP_REPO', 'APP_REF',
                      'APP_COMMIT']  # the model-file values written into the coverage metadata
+        audit = ctx.paths.get('RASDAMAN_AUDIT', '')
         return dict(runs=ctx.fingerprint('runs'), model={k: ctx.model.get(k) for k in meta_keys},
                     places=sha256_file(ctx.require('places') / 'places_ak.csv'),
-                    defaults=sha256_file(ctx.require('defaults') / 'place_defaults.csv'))
+                    defaults=sha256_file(ctx.require('defaults') / 'place_defaults.csv'),
+                    # the metadata check's version: a new commit of the audit re-runs the stage
+                    rasdaman_audit=audit_commit(audit) if audit else None)
 
     def env(self, ctx):
         return dict(NGIDF_ENV=str(ctx.require('env_ngidf') / 'env'), APP_DIR=str(ctx.require('app') / 'app'),
                     RUNS_ROOT=str(ctx.require('runs')), PLACES_CSV=str(ctx.require('places') / 'places_ak.csv'),
                     DEFAULTS_CSV=str(ctx.require('defaults') / 'place_defaults.csv'),
-                    MODEL_FILE=str(ctx.model_file), RASDAMAN_AUDIT=os.environ.get('RASDAMAN_AUDIT', ''))
+                    MODEL_FILE=str(ctx.model_file), RASDAMAN_AUDIT=ctx.paths.get('RASDAMAN_AUDIT', ''))
 
     def jobs(self, ctx):
         return [Job('build', 'slurm/stages/coverage.sbatch')]
@@ -790,8 +801,12 @@ class CoverageStage(Stage):
         c = [check('coverage files written', all((out / f).exists() for f in ('ngidf_places.nc', 'ngidf_places_am.nc')))]
         mc = out / 'metadata_check.txt'
         if mc.exists():
-            txt = mc.read_text()
-            c.append(check('rasdaman metadata check', 'FAIL' not in txt.upper(), txt.strip()[-300:]))
+            # coverage.sbatch writes "== <file>", the script's output, and "exit <code>" for each file; the
+            # script exits non-zero when the metadata contains the word "into" (it breaks encoded requests)
+            files = re.findall(r'^== (\S+)\n(.*?)^exit (\d+)$', mc.read_text(), flags=re.M | re.S)
+            ok = bool(files) and all(code == '0' for _, _, code in files)
+            detail = '; '.join(f"{name}: {' '.join(text.split())[:200] or 'no output'}" for name, text, _ in files)
+            c.append(check('rasdaman metadata check', ok, detail or mc.read_text().strip()[-300:]))
         else:
             c.append(check('rasdaman metadata check', False, 'RASDAMAN_AUDIT not set: not run', warn=True))
         counts = [dict(dataset=k, places=v) for k, v in s['counts'].items()]
@@ -813,7 +828,7 @@ class QaStage(Stage):
     code = ['ngidf/qa/*.py', 'slurm/stages/qa.sbatch']
     explain = ('Checks every run against the author\'s code (what our wrapper changed, run by run), checks every '
                'fitted curve, summarises the results with maps and community curves, compares them with the '
-               'baseline release, and writes the self-contained HTML report.')
+               'baseline release when the model version names one, and writes the self-contained HTML report.')
 
     def baseline_coverage(self, ctx):
         if ctx.model.get('BASELINE_MODEL'):
@@ -1128,7 +1143,18 @@ def package(ctx, flow_run=None, out_dir=None, python=None):
     if r.returncode:
         raise SystemExit(f'building the QC package failed:\n{r.stderr[-3000:]}')
     pdf = Path(r.stdout.strip().splitlines()[-1])
-    return dict(pdf=str(pdf), html=str(pdf.with_suffix('.html')), dir=str(out))
+    res = dict(pdf=str(pdf), html=str(pdf.with_suffix('.html')), dir=str(out))
+    # delivery folder for Rasdaman: the coverage files of this run and the recipes to ingest them with
+    if by['coverage']['status'] in ('pass', 'warn'):
+        dest = out / 'rasdaman'
+        dest.mkdir(exist_ok=True)
+        cov = Path(by['coverage']['dir']) / 'out'
+        for f in ('ngidf_places.nc', 'ngidf_places_am.nc', 'ngidf_places_inputs.csv'):
+            shutil.copy2(cov / f, dest / f)
+        for f in sorted((REPO / 'recipes').glob('*.json')):
+            shutil.copy2(f, dest / f.name)
+        res['rasdaman'] = str(dest)
+    return res
 
 
 # ---------------------------------------------------------------------------------------------- CLI

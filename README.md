@@ -96,6 +96,7 @@ Large data lives outside the repo, in `DATA_ROOT` (`config/paths.env`):
 | `raw/` | Downloaded inputs, with `SHA256SUMS` |
 | `stages/<stage>/<fingerprint>/` | Pipeline stage outputs: `out/`, `logs/`, `job.env`, `stage.json`, `report.json` |
 | `releases/<name>/` | `release.json`, all stage reports, `report.html`, link to the coverage |
+| `packages/<time>_<model>_<flow run>/` | One per flow run: the QC package (PDF and HTML) and `rasdaman/` (coverage files, inputs table and `wcst_import` recipes, ready to ingest) |
 | `envs/`, `app/`, `work/`, `runs/`, `output/` | From before the pipeline (2026-11-17); some are adopted by stages |
 
 ## Pipeline
@@ -105,7 +106,7 @@ Large data lives outside the repo, in `DATA_ROOT` (`config/paths.env`):
 1. Environments, app checkout and source-data checksums.
 2. Places, defaults, and the forcing (11 WRF/CESM datasets and Daymet).
 3. DHSVM build, then reference runs on the author's own inputs.
-4. Production runs, then coverage, then QA and the HTML report.
+4. Production runs, then coverage (with SNAP's Rasdaman metadata check, from the `rasdaman-audit` clone set in `RASDAMAN_AUDIT`), then QA and the HTML report.
 
 Each stage writes into `stages/<stage>/<fingerprint>/`. The fingerprint is a hash of exactly what the stage reads: its code, input content, parameters and environment. A stage whose report passed is skipped, and nothing is overwritten. The Prefect flow (`ua-snap/prefect`, `ng_idf/`) drives the same commands and turns each stage's `report.json` into artifacts.
 
