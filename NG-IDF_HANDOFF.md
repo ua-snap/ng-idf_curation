@@ -43,7 +43,7 @@ We precompute **NG-IDF curves** (next-generation intensity-duration-frequency: r
 - **First draft release built** (flow run `nu5-lhun-expanse`, 2026-11-23, curation commit `3fa3049`): all stages pass, with the known warnings in section 4 of its PDF. Package and Rasdaman delivery folder: `/import/beegfs/SNAP/jdpaul3/ng-idf_curation_data/packages/20261123_1555_a582a5c_nu5-lhun-expanse/`. The coverage files are not yet ingested into Rasdaman.
 - The data root, the flow's clone and `rasdaman-audit` are shared with the group (set 2026-11-24): group-writable, except `rasdaman-audit`, which is group-readable only.
 - All results are **provisional** until H. Yan's soil-temperature DHSVM is out and run.
-- The follow-up email to H. Yan is drafted but not sent (it includes a request for reference runs from his app at 5 points).
+- The follow-up email to H. Yan was sent on 2026-11-24 (it includes a request for reference runs from his app at 5 points). Waiting for his reply.
 
 ## 5. How to run the pipeline from Chinook and walk away
 
@@ -156,7 +156,8 @@ A flow run uses the text only after it is committed and pushed.
 ## 7. Open items
 
 **Waiting on H. Yan**
-- Send the follow-up email (drafted; includes the wetland count, the bucket-reset bug, the WRF humidity question, moss, the elevation file, and a request for reference runs at 5 points).
+- Reply to the follow-up email (sent 2026-11-24: the wetland count, the bucket-reset bug, LAI and height for land-cover scenarios, the WRF humidity question, moss, the elevation file, and a request for reference runs at 5 points).
+- LAI and height to use when a place's land cover is changed (needed before curves for other land covers can be added).
 - Wetland canopies below 0.775 m: his choice of fix (floor the height at 0.78 m, or run as open, or other).
 - His republished defaults table: check our heights against it.
 - Moss: DHSVM class, LAI and height.
